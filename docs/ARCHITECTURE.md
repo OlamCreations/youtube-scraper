@@ -1,39 +1,48 @@
 # Architecture Overview
 
-The YouTube Scraper project utilizes a hybrid local/remote architecture to reliably extract, store, and build transcript libraries without tying up local resources or risking IP bans on residential networks.
+`youtube-scraper` is a local-first project.
 
-## Pipeline Architecture
+Its purpose is simple:
+- fetch video metadata from YouTube channels
+- download auto-generated captions when available
+- clean and store transcripts in SQLite
+- generate a readable markdown library from the stored data
 
-The system is split into two main components: a remote scraping service and a local library builder.
+## Main Components
 
-### 1. Remote Pipeline (VPS)
+### 1. Scraper
 
-A remote VPS runs a Bun/TypeScript service (`youtube-pipeline.service`) responsible for all heavy lifting and interactions with YouTube. It operates on a Directed Acyclic Graph (DAG) workflow:
+[`scripts/scrape.py`](C:/dev/projects/open-source/youtube-scraper/scripts/scrape.py) handles:
+- channel seeding
+- channel listing
+- recent video discovery
+- transcript download through `yt-dlp`
+- storage in SQLite
 
-`scrape` -> `analyze` -> `generate` -> `produce` -> `upload`
+The scraper writes into:
+- `data/db/youtube.db`
+- `data/tmp/`
 
-*   **Scrape:** Uses `yt-dlp` to fetch video metadata and auto-generated captions for tracked channels. No AI models are involved; it strictly relies on YouTube's own auto-captions to ensure speed and low resource usage.
-*   **Analyze:** Processes the raw captions, cleaning timestamps and formatting them into readable text.
-*   **Generate/Produce/Upload:** Prepares the data for storage and potential remote syncing.
+### 2. Storage
 
-**Automation:**
-*   A cron job is scheduled to run every 30 minutes, executing the `scrape` and `analyze` steps automatically to keep the database up-to-date with new videos.
-*   A manual trigger run can be initiated to process the entire pipeline end-to-end.
+SQLite is the source of truth for the local workflow.
 
-### 2. The Source of Truth: SQLite
+Main tables:
+- `channels`
+- `videos`
+- `transcripts`
 
-All data harvested by the VPS is stored in a structured SQLite database. This database acts as the single source of truth for the entire system.
-*   `channels` table: Tracks the channels being monitored.
-*   `videos` table: Stores metadata for all discovered videos.
-*   `transcripts` table: Holds the cleaned, processed caption text.
+This keeps the project easy to inspect, portable, and scriptable.
 
-### 3. Local Library Builder
+### 3. Library Builder
 
-The local machine acts as the consumer and presenter of this data.
+[`scripts/build_library.py`](C:/dev/projects/open-source/youtube-scraper/scripts/build_library.py) reads the SQLite data and produces a friendlier markdown export under `data/library/`.
 
-1.  **Sync:** The local machine uses SSH/SCP (via `manage.ps1 sync`) to securely download the latest SQLite database from the VPS.
-2.  **Build:** Once the database is local, Python scripts (`build_library.py`) query the SQLite data and generate a static, markdown-based folder structure.
+The generated library is organized for:
+- browsing by channel
+- searching by topic
+- building bundles of transcripts for downstream use
 
-This decouples the scraping from the viewing. The local builder organizes the data into two primary views:
-*   **By Channel:** Human-readable filenames (e.g., `by_channel/kurzgesagt/The_Immune_System.md`) optimized for browsing and reading.
-*   **By Video ID:** Programmatic structure (e.g., `videos/v_123456/transcript.md`) optimized for scripting and linking.
+## Optional Helpers
+
+The repository also includes optional helper scripts for users who want to automate runs or move data across machines, but they are not required for the core local workflow.
