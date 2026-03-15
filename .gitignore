@@ -1,8 +1,15 @@
+# Data files (too large for git — runtime data, not source code)
 data/*
 !data/.gitkeep
+openclaw_live/
+youtube_scraps_*/
 logs/
 *.db
 *.db-journal
+*.tar.gz
+*.log
+
+# Python
 __pycache__/
 .pytest_cache/
 *.pyc
@@ -12,5 +19,10 @@ build/
 .venv/
 venv/
 .env
-*.tar.gz
-*.log
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

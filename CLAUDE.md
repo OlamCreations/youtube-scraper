@@ -1,75 +1,68 @@
-# CLAUDE.md — YouTube Scraper
+# CLAUDE.md — YouTube Scraper (Private)
 
 ## What This Is
 
-A standalone YouTube transcript scraper. Scrapes channels via yt-dlp, stores in SQLite, builds a browsable markdown library.
+YouTube transcript scraper + library builder. Scrapes channels via yt-dlp, stores in SQLite, builds a browsable markdown library. VPS pipeline on OpenClaw Sentinel (46.225.98.179) + local scraping.
+
+## Skill: /scrape-yt
+
+This project is a Claude Code skill. Invoke with `/scrape-yt`.
 
 ## Commands
 
-```bash
-# Seed channels from JSON
-python scripts/scrape.py ./data --seed channels.example.json
-
-# Scrape all enabled channels (default 50 videos per channel)
-python scripts/scrape.py ./data
-
-# Scrape with more depth
-python scripts/scrape.py ./data --limit 200
-
-# Scrape a single channel by ID
-python scripts/scrape.py ./data --channel UCUyDOdBWhC1MCxEjC46d-zw
-
-# List all channels
-python scripts/scrape.py ./data --list
-
-# Build the browsable library
-python scripts/build_library.py build ./data
-
-# Search transcripts
-python scripts/build_library.py search ./data "sales closing"
-
-# Generate LLM bundle
-python scripts/build_library.py bundle ./data "negotiation"
-```
-
-## Adding a Channel
-
-To add a channel, insert into SQLite:
+### Local scraping
 
 ```bash
-python -c "
-import sqlite3
-conn = sqlite3.connect('data/db/pipeline.db')
-conn.execute(\"INSERT INTO channels (id, name, handle, category, language, enabled) VALUES (?, ?, ?, ?, ?, 1)\",
-    ('CHANNEL_ID', 'Channel Name', '@Handle', 'category', 'en'))
-conn.commit()
-conn.close()
-"
+python scripts/scrape.py openclaw_live                          # scrape all channels
+python scripts/scrape.py openclaw_live --limit 200              # more depth
+python scripts/scrape.py openclaw_live --channel UCxxx          # single channel
+python scripts/scrape.py openclaw_live --list                   # list channels
 ```
 
-Or seed from channels.example.json.
+### Build library
+
+```bash
+python scripts/build_library_from_db.py build openclaw_live     # full library
+python scripts/build_library_from_db.py search openclaw_live "sales closing"
+python scripts/build_library_from_db.py bundle openclaw_live "negotiation"
+```
+
+### VPS pipeline (24/7 mode)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/manage_youtube_pipeline.ps1 -Action health
+powershell -ExecutionPolicy Bypass -File scripts/manage_youtube_pipeline.ps1 -Action trigger-run
+powershell -ExecutionPolicy Bypass -File scripts/manage_youtube_pipeline.ps1 -Action sync
+```
+
+### Adding a channel
+
+```bash
+ssh root@46.225.98.179 "sqlite3 /root/youtube-pipeline/db/pipeline.db \
+  \"INSERT INTO channels (id, name, handle, category, language, enabled) \
+  VALUES ('UCxxx', 'Name', '@Handle', 'cat', 'en', 1);\""
+```
+
+For local-only: same INSERT but on `openclaw_live/db/pipeline.db`.
 
 ## Data Locations
 
 | What | Where |
 |------|-------|
-| SQLite DB | `data/db/pipeline.db` |
-| Library | `data/library/` |
-| Browse by channel | `data/library/by_channel/` |
-| Video transcripts | `data/library/videos/{id}/transcript.md` |
-| LLM bundles | `data/library/bundles/` |
-| Catalog | `data/library/metadata/catalog.jsonl` |
+| SQLite DB | `openclaw_live/db/pipeline.db` |
+| Library | `openclaw_live/library/` |
+| Browse by channel | `openclaw_live/library/by_channel/` |
+| Video transcripts | `openclaw_live/library/videos/{id}/transcript.md` |
+| LLM bundles | `openclaw_live/library/bundles/` |
+| Catalog | `openclaw_live/library/metadata/catalog.jsonl` |
 
-## Requirements
+## VPS
 
-1. Python 3.10+
-2. yt-dlp (`pip install yt-dlp`)
+Host: `46.225.98.179` (openclaw-sentinel)
+Pipeline: `/root/youtube-pipeline/`
+Service: `youtube-pipeline.service`
+Cron: every 30 min (scrape + analyze only, manual trigger for full pipeline)
 
-## Workflow
+## Blueprint
 
-1. Add channels (seed or INSERT)
-2. Scrape (`scripts/scrape.py`)
-3. Build library (`scripts/build_library.py build`)
-4. Browse `data/library/by_channel/`
-
-Always scrape before building the library to get the latest videos.
+`youtube_scraper.vgb.json` — workflow graph with flows: full_pipeline, update, search_bundle.

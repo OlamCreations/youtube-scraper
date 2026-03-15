@@ -1,123 +1,207 @@
-# YouTube Scraper
+# youtube_scraping
 
-**Build a searchable transcript library from YouTube channels**
+Local control-plane repo for the YouTube scraping/transcript runtime on `46.225.98.179`, plus a structured transcript library built from exported artifacts.
 
-Scrape YouTube channels, extract auto-generated captions, and build a browsable markdown library organized by channel with human-readable filenames. No AI model needed — uses YouTube's own auto-captions.
+## What This Repo Actually Contains
 
-## Quick Start
+This is not the Bun runtime repo itself. It is the local operator repo used to:
 
-```bash
-git clone https://github.com/OlamCreations/youtube-scraper.git
-cd youtube-scraper
+- pilot the live `youtube-pipeline` service on the VPS
+- inspect health, logs, runs, and disk state
+- trigger workflow actions remotely
+- export transcripts and SQLite state back to the workstation
+- rebuild a browsable local transcript archive from SQLite
+- build a reusable `library/` layer for humans and LLMs
 
-# Add channels
-python scripts/scrape.py ./data --seed channels.example.json
+The repository currently contains:
 
-# Scrape transcripts
-python scripts/scrape.py ./data
+- `scripts/`: maintenance scripts used to sync data and rebuild transcript exports
+- `openclaw_live/`: current local mirror of the live OpenClaw transcript workspace
+- `youtube_scraps_openclaw_2026-02-26/`: historical export snapshot
+- `logs/`: local sync logs
 
-# Build the library
-python scripts/build_library.py build ./data
+The bulk of the repository is generated data, not source code.
 
-# Browse
-ls data/library/by_channel/
-```
+## Main Workflow
 
-That's it. No VPS, no API keys, no setup. Just Python and yt-dlp.
+Source of truth is the OpenClaw Sentinel VPS at `46.225.98.179`, under `/root/youtube-pipeline`.
 
-## What it does
+The normal operator workflow is:
 
-1. **Scrape:** Fetches video lists and auto-generated captions from YouTube channels using `yt-dlp`
-2. **Store:** Cleans VTT captions and stores them in a local SQLite database
-3. **Build:** Generates a browsable markdown library organized by channel, theme, and video
+1. Inspect the VPS runtime from this repo
+2. Trigger or restart the pipeline if needed
+3. Export `workspace/transcripts` and `db/pipeline.db` to local
+4. Rebuild normalized Markdown transcript files from SQLite
+5. Clean ephemeral VPS artifacts after export
 
-## Library Structure
+## VPS Control Plane
 
-The primary browsing interface is `by_channel/` — one markdown file per video, named by title.
-
-```text
-data/library/
-├── by_channel/             # Browse by channel, human-readable filenames
-│   ├── alex-hormozi/
-│   │   ├── 13 Years Of Brutally Honest Business Advice in 90 Mins.md
-│   │   ├── 16 Sales Closes In 60 Seconds.md
-│   │   └── How to Change Your Life.md
-│   └── naval/
-│       └── How to Get Rich.md
-├── videos/                 # Programmatic access by video ID
-├── channels/               # Channel metadata and indices
-├── themes/                 # Cross-channel thematic collections
-├── bundles/                # Pre-packaged LLM-ready context
-└── metadata/               # Full catalog (catalog.jsonl)
-```
-
-See [docs/LIBRARY.md](docs/LIBRARY.md) for details.
-
-## Commands
-
-### Scraping
-
-```bash
-# Seed channels from a JSON file
-python scripts/scrape.py ./data --seed channels.example.json
-
-# Scrape all enabled channels (default: 50 most recent videos per channel)
-python scripts/scrape.py ./data
-
-# Scrape more videos per channel
-python scripts/scrape.py ./data --limit 200
-
-# Scrape a single channel
-python scripts/scrape.py ./data --channel UCUyDOdBWhC1MCxEjC46d-zw
-
-# List all channels with video counts
-python scripts/scrape.py ./data --list
-```
-
-### Building the Library
-
-```bash
-# Build the full library
-python scripts/build_library.py build ./data
-
-# Search transcripts
-python scripts/build_library.py search ./data "sales closing"
-
-# Generate an LLM-ready bundle
-python scripts/build_library.py bundle ./data "negotiation"
-```
-
-### VPS Mode (optional, for 24/7 scraping)
-
-For continuous scraping, deploy the pipeline on a VPS. See [docs/VPS_SETUP.md](docs/VPS_SETUP.md).
+The main entry point is now:
 
 ```powershell
-# Remote control from your machine
-scripts/manage.ps1 health
-scripts/manage.ps1 trigger-run
-scripts/manage.ps1 sync
+powershell -ExecutionPolicy Bypass -File .\scripts\manage_youtube_pipeline.ps1 -Action status
 ```
 
-## Adding Channels
+Supported actions:
 
-Option 1 — seed from JSON:
-```bash
-python scripts/scrape.py ./data --seed channels.example.json
+- `status`: `systemd` state plus recent service status
+- `health`: live `GET /api/health`
+- `runs`: live `GET /api/runs`
+- `trigger-run`: authenticated `POST /api/trigger/run`
+- `restart`: restart `youtube-pipeline.service`
+- `logs`: tail daily pipeline JSONL log
+- `service-logs`: tail `journalctl`
+- `disk`: root filesystem and runtime directory sizes
+- `sync`: export transcripts + DB to local mirror and rebuild Markdown
+- `cleanup`: purge exported transcript files and rotate old workspace dirs on VPS
+- `backfill`: run `scripts/backfill-transcripts.ts`
+- `produce`: run `scripts/produce.sh`
+
+Examples:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\manage_youtube_pipeline.ps1 -Action health
+powershell -ExecutionPolicy Bypass -File .\scripts\manage_youtube_pipeline.ps1 -Action runs
+powershell -ExecutionPolicy Bypass -File .\scripts\manage_youtube_pipeline.ps1 -Action logs -Tail 200
+powershell -ExecutionPolicy Bypass -File .\scripts\manage_youtube_pipeline.ps1 -Action trigger-run
+powershell -ExecutionPolicy Bypass -File .\scripts\manage_youtube_pipeline.ps1 -Action sync
 ```
 
-Option 2 — insert directly into SQLite:
-```sql
-INSERT INTO channels (id, name, handle, category, language, enabled)
-VALUES ('UCUyDOdBWhC1MCxEjC46d-zw', 'Alex Hormozi', '@AlexHormozi', 'sales', 'en', 1);
+## Transcript Library
+
+The second major entry point is:
+
+```powershell
+python .\scripts\build_library_from_db.py build .\openclaw_live
 ```
 
-## Requirements
+This generates a structured library under `openclaw_live/library/` with:
 
-1. Python 3.10+
-2. [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install yt-dlp`)
+- `channels/` for channel-by-channel browsing
+- `videos/` for one folder per video with transcript, metadata, and context bundle
+- `themes/` for cross-channel topic views
+- `metadata/catalog.jsonl` as the normalized source for tooling
+- `metadata/embeddings.jsonl` as a first local retrieval layer
+- `bundles/` with ready-to-paste LLM context bundles
 
-Optional for VPS mode: PowerShell, SSH access.
+Useful commands:
 
-## License
+```powershell
+python .\scripts\build_library_from_db.py build .\openclaw_live
+python .\scripts\build_library_from_db.py search .\openclaw_live --query "stoic discipline focus"
+python .\scripts\build_library_from_db.py bundle .\openclaw_live --query "mindfulness and breathing"
+```
 
-MIT — See [LICENSE](LICENSE).
+Detailed usage is documented in [docs/LLM_LIBRARY.md](C:\dev\projects\youtube_scraping\docs\LLM_LIBRARY.md).
+
+## Actual Runtime On The VPS
+
+The live scraper/transcript system is a separate Bun/TypeScript repo on the VPS, not this local mirror.
+
+- Runtime root: `/root/youtube-pipeline`
+- Service: `youtube-pipeline.service`
+- Entry point: `src/index.ts`
+- API port: `3847`
+- Schedule: cron trigger every 30 minutes
+- Main DAG: `scrape -> analyze -> generate -> produce -> upload`
+
+This local repo only mirrors:
+
+- `workspace/transcripts`
+- `db/pipeline.db`
+
+and rebuilds a friendlier export from those artifacts.
+
+See [docs/VPS_CARTOGRAPHY.md](C:\dev\projects\youtube_scraping\docs\VPS_CARTOGRAPHY.md) for the detailed runtime map.
+See [docs/VPS_SECURITY_AUDIT.md](C:\dev\projects\youtube_scraping\docs\VPS_SECURITY_AUDIT.md) for the current VPS security posture and OpenClaw inventory.
+
+## VPS Split
+
+As of March 9, 2026, the workloads are intentionally split:
+
+- `46.225.98.179` (`openclaw-sentinel`): TorahCode, YouTube pipeline, OpenClaw, Parnassa hotpath
+- `46.225.173.203` (`filon-zeroclaw-01`): Le Filon only
+
+Le Filon was migrated off `46.225.98.179` and should not be redeployed there.
+The Filon VPS now serves the scraper path from `46.225.173.203` directly.
+Public DNS was aligned on March 9, 2026:
+
+- `lefilon.ai` -> `46.225.173.203`
+- `www.lefilon.ai` -> `46.225.173.203`
+- `ai.lefilon.ai` -> `46.225.173.203`
+- `sre.lefilon.ai` -> `46.225.173.203`
+- `admin.lefilon.ai` removed
+
+## Important Scripts
+
+### Sync from OpenClaw VPS
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\sync_openclaw_transcripts.ps1
+```
+
+Equivalent through the control-plane wrapper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\manage_youtube_pipeline.ps1 -Action sync
+```
+
+Defaults:
+
+- Host: `root@46.225.98.179`
+- Remote root: `/root/youtube-pipeline`
+- Local root: `C:\dev\projects\youtube_scraping\openclaw_live`
+- Default behavior after a successful export:
+  - clears exported files from `workspace/transcripts` on the VPS
+  - deletes old `workspace/scrape/*` directories older than 3 days
+  - deletes old `workspace/produce/*` directories older than 3 days
+
+Optional override:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\sync_openclaw_transcripts.ps1 -SkipRemoteCleanup
+```
+
+### Rebuild transcript export from local SQLite DB
+
+```powershell
+python .\scripts\build_transcripts_from_db.py .\openclaw_live
+```
+
+Expected DB path under the target root:
+
+- `db/pipeline.db`
+
+Generated outputs:
+
+- `transcripts/by_video/`
+- `transcripts/INDEX.md`
+- `README_TRANSCRIPTS.md`
+
+## Operational Notes
+
+- This repo should now be treated as the local operator console for `/root/youtube-pipeline`, not just as a passive mirror.
+- `build_transcripts_from_db.py` now rebuilds into a temporary tree and swaps atomically, so a failed export should not wipe the previous `by_video` tree.
+- `sync_openclaw_transcripts.ps1` now uses a unique remote temp bundle path, validates basic SSH path inputs, and logs both success and failure.
+- `manage_youtube_pipeline.ps1` tunnels control through SSH and uses the remote `pipeline.env` for authenticated API actions, so you do not need to duplicate the YouTube pipeline bearer token locally in this repo.
+- `build_library_from_db.py` turns `pipeline.db` into a local knowledge library with channel/video/theme views plus deterministic local embeddings for targeted retrieval.
+- The repo currently has no normal application packaging, no top-level test runner config, and no conventional source/data split.
+- On March 9, 2026, the VPS runtime was temporarily blocked at the `scrape` pre-hook by disk pressure; after cleanup the host returned above the `2GB` `disk-check` threshold.
+- On March 9, 2026, the Filon Caddy config on `46.225.173.203` was simplified to remove stale ACME targets (`admin.lefilon.ai`, `hotpath.parnassa.work`), expose SRE admin through `/admin/*`, and then re-enabled hostname-based TLS for `lefilon.ai` and `www.lefilon.ai` after Cloudflare DNS was corrected.
+
+## Maintenance Guidance
+
+- Treat `openclaw_live/` as the current working mirror.
+- Treat `scripts/manage_youtube_pipeline.ps1` as the default entry point for live ops on `46.225.98.179`.
+- Treat `scripts/build_library_from_db.py` as the default entry point for building the local knowledge layer.
+- Treat dated export folders like `youtube_scraps_openclaw_2026-02-26/` as immutable snapshots unless explicitly asked to regenerate them.
+- Avoid mass-editing generated transcript files manually.
+- Prefer rebuilding from `db/pipeline.db` instead of editing transcript Markdown in place.
+- Prefer passing `library/bundles/*.md` or selected `videos/*/context.md` files to LLMs instead of dumping raw transcript folders.
+- If transcript freshness matters, check the VPS disk state before trusting the mirror; the service can be `active` in systemd while every cron run still fails fast.
+- The intended storage policy is now: export locally, then keep SQLite as the durable source of truth on the VPS while aggressively cleaning ephemeral workspace artifacts.
+
+## Known Limits
+
+- `git status` currently fails with `must be run in a work tree` from this path, so do not assume normal git review flows are available until repo state is clarified.
+- This repo mirrors only the YouTube transcript path from `46.225.98.179`; Le Filon now belongs on the separate VPS `46.225.173.203`.
