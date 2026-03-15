@@ -1,0 +1,16 @@
+data/*
+!data/.gitkeep
+logs/
+*.db
+*.db-journal
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+*.tar.gz
+*.log

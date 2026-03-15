@@ -1,0 +1,6 @@
+# Core scripts use only Python stdlib (sqlite3, json, pathlib, shutil, etc.)
+# No external Python packages required.
+#
+# The VPS pipeline additionally requires:
+# - yt-dlp (pip install yt-dlp)
+# - bun (https://bun.sh)
