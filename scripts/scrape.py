@@ -195,7 +195,6 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
             # Download transcript
             sub_cmd = [
                 "yt-dlp",
-                "--remote-components", "ejs:github",
                 "--write-auto-sub",
                 "--sub-lang", lang,
                 "--skip-download",
