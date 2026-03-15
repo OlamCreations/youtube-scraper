@@ -1,0 +1,95 @@
+{
+  "id": "youtube-scraper",
+  "name": "YouTube Transcript Scraper",
+  "version": "1.0.0",
+  "description": "Scrape YouTube channels, extract auto-captions, build browsable transcript library",
+
+  "trigger": {
+    "type": "manual",
+    "input": ["channels_json_or_channel_id", "data_dir", "limit"]
+  },
+
+  "nodes": {
+    "seed_channels": {
+      "type": "action",
+      "command": "python scripts/scrape.py {data_dir} --seed {channels_json}",
+      "description": "Seed channels from JSON file into SQLite",
+      "skip_if": "channels_already_seeded"
+    },
+
+    "scrape": {
+      "type": "action",
+      "command": "python scripts/scrape.py {data_dir} --limit {limit}",
+      "description": "Scrape all enabled channels: fetch video lists, download auto-captions, store in SQLite",
+      "output": "scrape_stats",
+      "runtime": {
+        "requires": ["python3", "yt-dlp"],
+        "network": true,
+        "gpu": false
+      }
+    },
+
+    "scrape_single": {
+      "type": "action",
+      "command": "python scripts/scrape.py {data_dir} --channel {channel_id} --limit {limit}",
+      "description": "Scrape a single channel by ID",
+      "output": "scrape_stats"
+    },
+
+    "build_library": {
+      "type": "action",
+      "command": "python scripts/build_library.py build {data_dir}",
+      "description": "Build browsable library from SQLite: by_channel/, videos/, themes/, bundles/, metadata/",
+      "output": "library_path",
+      "depends_on": ["scrape"]
+    },
+
+    "search": {
+      "type": "action",
+      "command": "python scripts/build_library.py search {data_dir} \"{query}\"",
+      "description": "Search transcripts by keyword",
+      "input": ["query"],
+      "output": "search_results"
+    },
+
+    "bundle": {
+      "type": "action",
+      "command": "python scripts/build_library.py bundle {data_dir} \"{query}\"",
+      "description": "Generate LLM-ready bundle from search query",
+      "input": ["query"],
+      "output": "bundle_path"
+    },
+
+    "list_channels": {
+      "type": "action",
+      "command": "python scripts/scrape.py {data_dir} --list",
+      "description": "List all channels with video counts"
+    }
+  },
+
+  "edges": [
+    ["seed_channels", "scrape"],
+    ["scrape", "build_library"]
+  ],
+
+  "flows": {
+    "full_pipeline": {
+      "description": "Seed + scrape + build library (one-shot)",
+      "nodes": ["seed_channels", "scrape", "build_library"]
+    },
+    "update": {
+      "description": "Scrape new videos + rebuild library",
+      "nodes": ["scrape", "build_library"]
+    },
+    "search_and_bundle": {
+      "description": "Search transcripts and generate LLM bundle",
+      "nodes": ["search", "bundle"]
+    }
+  },
+
+  "defaults": {
+    "data_dir": "./data",
+    "limit": 50,
+    "channels_json": "channels.example.json"
+  }
+}
