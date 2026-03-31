@@ -2,11 +2,11 @@
 
 ## Scope
 
-Operational context for `C:\dev\projects\youtube-scraper`.
+Local YouTube transcript scraper with VTT deduplication and markdown library builder.
 
 ## Architecture
 
-Local Python scraper + SQLite DB + markdown library builder. No remote runtime, no service, no API.
+Python scraper + SQLite DB + markdown library builder. Remote sync via PowerShell scripts configured through `.env`.
 
 ## Important Paths
 
@@ -21,12 +21,6 @@ Local Python scraper + SQLite DB + markdown library builder. No remote runtime, 
 | Config | `.env` (from `.env.example`) |
 | Blueprint | `youtube_scraper.vgb.json` |
 
-## VPS Data Mirror
-
-VPS host: `root@46.225.98.179` (metatron)
-VPS data: `/opt/metatron/data/youtube-scraper/` (flat: `db/`, `library/`)
-Structure mirrors local. No services or crons on VPS.
-
 ## Main Commands
 
 ### Scraping
@@ -36,21 +30,21 @@ python scripts/scrape.py . --limit 200            # more depth
 python scripts/scrape.py . --channel UCxxx        # single channel
 python scripts/scrape.py . --list                 # list channels
 python scripts/scrape.py . --seed channels.json   # seed from JSON
+python scripts/scrape.py . --rescrape-transcripts # re-clean all transcripts
 ```
 
 ### Library
 ```bash
 python scripts/build_library_from_db.py build .
-python scripts/build_library_from_db.py search . "query"
-python scripts/build_library_from_db.py bundle . "query"
+python scripts/build_library_from_db.py search . --query "query"
+python scripts/build_library_from_db.py bundle . --query "query"
 ```
 
-### VPS management
+### Remote management
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/manage.ps1 status
 powershell -ExecutionPolicy Bypass -File scripts/manage.ps1 health
 powershell -ExecutionPolicy Bypass -File scripts/manage.ps1 sync
-powershell -ExecutionPolicy Bypass -File scripts/manage.ps1 trigger-run
 ```
 
 ### Tests
@@ -62,17 +56,21 @@ pytest -q tests/
 
 | Script | Purpose |
 |--------|---------|
-| `scrape.py` | Scrape channels via yt-dlp, store in SQLite |
+| `scrape.py` | Scrape channels via yt-dlp, dedup VTT auto-subs |
 | `build_library_from_db.py` | Build/search/bundle markdown library from DB |
 | `build_library.py` | Alternative library builder |
 | `build_transcripts.py` | Build transcript outputs |
 | `build_transcripts_from_db.py` | Build transcripts from DB |
-| `manage.ps1` | VPS management (status, health, sync, trigger-run) |
-| `sync.ps1` | VPS -> local data sync (called by manage.ps1) |
+| `manage.ps1` | Remote management (status, health, sync, trigger-run) |
+| `sync.ps1` | Remote → local data sync (called by manage.ps1) |
+
+## VTT Deduplication
+
+YouTube auto-subs use a rolling-context format where each cue repeats the previous text plus new words. The `clean_vtt()` parser detects echo cues (< 50ms duration) and extracts only the new content, achieving ~3x word reduction.
 
 ## Rules For Future Agents
 
-1. Default to `manage.ps1` for VPS ops before ad hoc SSH commands.
+1. Default to `manage.ps1` for remote ops before ad hoc SSH commands.
 2. Default to `build_library_from_db.py` for structured knowledge access.
 3. Prefer rebuilding from `pipeline.db` over editing generated outputs.
 4. Be careful with broad search/edit — large number of generated files.
