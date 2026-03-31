@@ -1,8 +1,9 @@
-# Data files (too large for git — runtime data, not source code)
+# Data files (runtime data, not source code)
 data/*
 !data/.gitkeep
-openclaw_live/
-youtube_scraps_*/
+library/
+library_build_*/
+tmp/
 logs/
 *.db
 *.db-journal

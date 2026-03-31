@@ -1,6 +1,6 @@
 # LLM Library
 
-This repo now contains a local transcript library layer built from `openclaw_live/db/pipeline.db`.
+Local transcript library layer built from `db/pipeline.db`.
 
 ## Goal
 
@@ -12,13 +12,11 @@ Turn raw YouTube transcripts into a corpus that is usable by:
 
 ## Build
 
-```powershell
-python .\scripts\build_library_from_db.py build .\openclaw_live
+```bash
+python scripts/build_library_from_db.py build .
 ```
 
-Default output:
-
-- `openclaw_live/library/`
+Default output: `library/`
 
 ## Generated Structure
 
@@ -80,7 +78,7 @@ This layer is intentionally simple and replaceable.
 
 ## Retrieval Layer
 
-The repo now includes a lightweight local embedding index:
+The repo includes a lightweight local embedding index:
 
 - `library/metadata/embeddings.jsonl`
 
@@ -93,30 +91,28 @@ They exist to give the repo:
 
 Search:
 
-```powershell
-python .\scripts\build_library_from_db.py search .\openclaw_live --query "stoic discipline focus"
+```bash
+python scripts/build_library_from_db.py search . "stoic discipline focus"
 ```
 
 ## LLM Bundles
 
 Generate a query bundle:
 
-```powershell
-python .\scripts\build_library_from_db.py bundle .\openclaw_live --query "mindfulness and breathing"
+```bash
+python scripts/build_library_from_db.py bundle . "mindfulness and breathing"
 ```
 
-This writes:
-
-- `library/bundles/query__mindfulness-and-breathing.md`
+This writes: `library/bundles/query__mindfulness-and-breathing.md`
 
 Use bundles when you want to hand a chosen slice of the corpus to an LLM without dumping the full library.
 
 ## Recommended Usage Pattern
 
-1. `manage_youtube_pipeline.ps1 -Action sync`
-2. `build_library_from_db.py build .\openclaw_live`
-3. `build_library_from_db.py search .\openclaw_live --query "..."`
-4. `build_library_from_db.py bundle .\openclaw_live --query "..."`
+1. `manage.ps1 sync` (pull latest from VPS)
+2. `build_library_from_db.py build .`
+3. `build_library_from_db.py search . "..."`
+4. `build_library_from_db.py bundle . "..."`
 5. Pass the resulting bundle or specific `context.md` files to the LLM
 
 ## Future Replacement Path

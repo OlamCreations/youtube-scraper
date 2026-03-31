@@ -456,7 +456,7 @@ def build_library(root: Path, library_dir: Path | None = None) -> Path:
                     "",
                 ]
                 + [
-                    f"### {item.title}\n- video_id: `{item.video_id}`\n- themes: {', '.join(item.themes)}\n- summary: {item.summary or 'No summary.'}\n"
+                    f"### {item.title}\n- video_id: `{item.video_id}`\n- themes: {', '.join(item.themes)}\n- words: {item.word_count}\n\n{clip_text(item.transcript_text, 2000)}\n"
                     for item in sorted(items, key=lambda current: current.word_count, reverse=True)[:12]
                 ]
             )
@@ -497,7 +497,7 @@ def build_library(root: Path, library_dir: Path | None = None) -> Path:
                     "",
                 ]
                 + [
-                    f"## {item.title}\n- channel: `{item.channel_name}`\n- video_id: `{item.video_id}`\n- summary: {item.summary or 'No summary.'}\n"
+                    f"## {item.title}\n- channel: `{item.channel_name}`\n- video_id: `{item.video_id}`\n- words: {item.word_count}\n\n{clip_text(item.transcript_text, 2000)}\n"
                     for item in sorted(items, key=lambda current: current.word_count, reverse=True)[:15]
                 ]
             )
@@ -637,16 +637,20 @@ def write_query_bundle(library_dir: Path, query: str, limit: int = 8, output_pat
         "",
     ]
     for item in results:
+        transcript_excerpt = ""
+        transcript_path = library_dir / "videos" / item["video_id"] / "transcript.md"
+        if transcript_path.exists():
+            raw = transcript_path.read_text(encoding="utf-8", errors="replace")
+            transcript_excerpt = clip_text(raw, 2000)
         lines.extend(
             [
                 f"## {item['title']}",
                 f"- score: `{item['score']}`",
                 f"- channel: `{item['channel_name']}`",
                 f"- themes: `{', '.join(item['themes'])}`",
-                f"- tags: `{', '.join(item['tags'])}`",
                 f"- context: `{item['context_path']}`",
                 "",
-                item["summary"] or "No summary available.",
+                transcript_excerpt or "No transcript available.",
                 "",
             ]
         )

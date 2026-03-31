@@ -66,29 +66,67 @@ def init_db(db_path: pathlib.Path):
     return conn
 
 def clean_vtt(text: str) -> str:
-    """Cleans VTT file contents into raw text."""
+    """Cleans VTT file contents into deduplicated raw text.
+
+    YouTube auto-subs use a rolling-context format: each cue has two lines —
+    the first repeats the previous cue's text and the second contains the new
+    words with inline ``<c>`` timestamps.  Cues with near-zero duration
+    (< 50 ms) are pure context echoes and carry no new content.
+
+    Strategy: parse cues, keep only the *second* line of real (non-echo) cues,
+    strip inline tags, then join.
+    """
     lines = text.splitlines()
-    cleaned_lines = []
-    for line in lines:
-        line = line.strip()
-        if not line:
+    cues: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        # Skip headers and blanks
+        if not line or "WEBVTT" in line or line.startswith("Kind:") or line.startswith("Language:"):
+            i += 1
             continue
-        # Remove headers
-        if "WEBVTT" in line or line.startswith("Kind:") or line.startswith("Language:"):
+        # Detect timestamp line
+        ts_match = re.match(
+            r'^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})', line
+        )
+        if not ts_match:
+            i += 1
             continue
-        # Remove timestamp lines
-        if re.match(r'^\d{2}:\d{2}', line):
+        # Parse start/end to detect echo cues (duration < 50 ms)
+        start_ms = _ts_to_ms(ts_match.group(1))
+        end_ms = _ts_to_ms(ts_match.group(2))
+        is_echo = (end_ms - start_ms) < 50
+        # Collect all payload lines until next blank or timestamp
+        i += 1
+        payload_lines: list[str] = []
+        while i < len(lines):
+            pl = lines[i].strip()
+            if not pl:
+                i += 1
+                break
+            if re.match(r'^\d{2}:\d{2}', pl):
+                break
+            payload_lines.append(pl)
+            i += 1
+        if is_echo or not payload_lines:
             continue
-        # Remove HTML tags
-        line = re.sub(r'<[^>]+>', '', line)
-        line = line.strip()
-        if line:
-            cleaned_lines.append(line)
-            
-    text = " ".join(cleaned_lines)
-    # Collapse multiple whitespaces
+        # For rolling-context cues, the NEW content is the last payload line
+        new_line = payload_lines[-1] if len(payload_lines) > 1 else payload_lines[0]
+        # Strip inline tags like <c> </c> <00:00:01.234>
+        new_line = re.sub(r'<[^>]+>', '', new_line).strip()
+        if new_line:
+            cues.append(new_line)
+
+    text = " ".join(cues)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
+
+
+def _ts_to_ms(ts: str) -> int:
+    """Convert 'HH:MM:SS.mmm' to milliseconds."""
+    h, m, rest = ts.split(":")
+    s, ms = rest.split(".")
+    return int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
 
 def seed_channels(conn, json_file):
     """Seeds channels from a JSON file into the database."""
@@ -162,8 +200,8 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
             url
         ]
         
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', check=False)
-        lines = proc.stdout.splitlines()
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
+        lines = (proc.stdout or "").splitlines()
         
         videos = []
         for i in range(0, len(lines) - 1, 2):
@@ -226,17 +264,20 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
                     
                     cursor.execute("UPDATE videos SET has_transcript=1, transcript_source='auto-sub' WHERE id=?", (vid,))
                     
-                    print(f"[{idx}/{len(new_videos)}] {vtitle} ({vid})\n  -> {word_count} words", flush=True)
+                    safe_title = vtitle.encode('ascii', errors='replace').decode('ascii')
+                    print(f"[{idx}/{len(new_videos)}] {safe_title} ({vid})\n  -> {word_count} words", flush=True)
                     transcripts_added += 1
                 except Exception as e:
-                    print(f"[{idx}/{len(new_videos)}] {vtitle} ({vid})\n  -> error processing transcript: {e}", flush=True)
+                    safe_title = vtitle.encode('ascii', errors='replace').decode('ascii')
+                    print(f"[{idx}/{len(new_videos)}] {safe_title} ({vid})\n  -> error processing transcript: {e}", flush=True)
                 finally:
                     try:
                         vtt_file.unlink()
                     except OSError:
                         pass
             else:
-                print(f"[{idx}/{len(new_videos)}] {vtitle} ({vid})\n  -> no transcript available", flush=True)
+                safe_title = vtitle.encode('ascii', errors='replace').decode('ascii')
+                print(f"[{idx}/{len(new_videos)}] {safe_title} ({vid})\n  -> no transcript available", flush=True)
                 
             videos_added += 1
             
@@ -256,6 +297,69 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
         
         print(f"=== Done: {videos_added} videos added, {transcripts_added} transcripts ===", flush=True)
 
+def rescrape_transcripts(conn, data_dir):
+    """Re-download and re-clean all transcripts using the improved VTT parser."""
+    cursor = conn.cursor()
+    scrape_dir = data_dir / "tmp"
+    scrape_dir.mkdir(parents=True, exist_ok=True)
+
+    cursor.execute("""
+        SELECT v.id, v.title, c.language
+        FROM videos v
+        JOIN channels c ON v.channel_id = c.id
+        WHERE v.has_transcript = 1
+        ORDER BY c.name, v.title
+    """)
+    rows = cursor.fetchall()
+    print(f"=== Re-scraping {len(rows)} transcripts with dedup VTT parser ===", flush=True)
+
+    updated = 0
+    failed = 0
+    for idx, (vid, title, lang) in enumerate(rows, 1):
+        sub_cmd = [
+            "yt-dlp",
+            "--write-auto-sub",
+            "--sub-lang", lang or "en",
+            "--skip-download",
+            "--no-check-formats",
+            "-o", f"{scrape_dir}/%(id)s",
+            f"https://www.youtube.com/watch?v={vid}"
+        ]
+        subprocess.run(sub_cmd, capture_output=True, check=False)
+        vtt_files = list(scrape_dir.glob(f"{vid}*.vtt"))
+        if vtt_files:
+            try:
+                with open(vtt_files[0], 'r', encoding='utf-8') as f:
+                    raw_vtt = f.read()
+                clean_text = clean_vtt(raw_vtt)
+                word_count = len(clean_text.split())
+                quality_score = min(word_count / 500.0, 1.0)
+                cursor.execute("""
+                    UPDATE transcripts
+                    SET raw_text = ?, word_count = ?, quality_score = ?
+                    WHERE video_id = ?
+                """, (clean_text, word_count, quality_score, vid))
+                updated += 1
+                if idx % 20 == 0:
+                    conn.commit()
+                    print(f"  [checkpoint: {idx}/{len(rows)}, {updated} updated]", flush=True)
+            except Exception as e:
+                safe_title = title.encode('ascii', errors='replace').decode('ascii')
+                print(f"  [{idx}] error {safe_title}: {e}", flush=True)
+                failed += 1
+            finally:
+                for vf in vtt_files:
+                    try:
+                        vf.unlink()
+                    except OSError:
+                        pass
+        else:
+            failed += 1
+
+    conn.commit()
+    print(f"=== Done: {updated} updated, {failed} failed out of {len(rows)} ===", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Local YouTube transcript scraper")
     parser.add_argument("data_dir", help="Directory for data storage (contains db/ and tmp/)")
@@ -263,21 +367,24 @@ def main():
     parser.add_argument("--channel", help="Scrape only specific channel ID")
     parser.add_argument("--seed", help="Seed channels from JSON file into DB")
     parser.add_argument("--list", action="store_true", help="List all channels with video counts")
-    
+    parser.add_argument("--rescrape-transcripts", action="store_true", help="Re-download and re-clean all transcripts with improved VTT dedup")
+
     args = parser.parse_args()
-    
+
     data_dir = pathlib.Path(args.data_dir)
     db_dir = data_dir / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
-    
-    db_path = db_dir / "youtube.db"
+
+    db_path = db_dir / "pipeline.db"
     conn = init_db(db_path)
-    
+
     try:
         if args.seed:
             seed_channels(conn, args.seed)
         elif args.list:
             list_channels(conn)
+        elif args.rescrape_transcripts:
+            rescrape_transcripts(conn, data_dir)
         else:
             scrape(conn, data_dir, args.limit, args.channel)
     finally:

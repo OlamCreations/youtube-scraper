@@ -92,7 +92,7 @@ def main(root: Path) -> None:
     readme = root / "README_TRANSCRIPTS.md"
     readme.write_text(
         "# Transcript Exports\n\n"
-        "- Source: OpenClaw Sentinel `/root/youtube-pipeline/db/pipeline.db`\n"
+        "- Source: `db/pipeline.db`\n"
         "- Main index: `transcripts/INDEX.md`\n"
         "- Per-video files: `transcripts/by_video/`\n",
         encoding="utf-8",
