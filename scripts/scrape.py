@@ -7,11 +7,28 @@ import sqlite3
 import subprocess
 import sys
 import argparse
+import importlib.util
 import pathlib
 import re
 import json
 import html
 import datetime
+
+
+def yt_dlp_command(find_spec=importlib.util.find_spec) -> list[str]:
+    """How to run yt-dlp: through this Python when the module is installed here,
+    otherwise the yt-dlp executable on PATH.
+
+    `pip install -r requirements.txt` installs the module next to this interpreter,
+    but its launcher lands in a Scripts folder that is not always on PATH (Windows
+    user installs, for example). Going through the interpreter needs no PATH entry.
+    """
+    if find_spec("yt_dlp") is not None:
+        return [sys.executable, "-m", "yt_dlp"]
+    return ["yt-dlp"]
+
+
+YT_DLP = yt_dlp_command()
 
 def init_db(db_path: pathlib.Path):
     """Initializes the database schema if it doesn't exist."""
@@ -216,7 +233,7 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
         
         # 1. List recent videos
         cmd = [
-            "yt-dlp",
+            *YT_DLP,
             "--flat-playlist",
             "--print", "id",
             "--print", "title",
@@ -270,7 +287,7 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
             
             # Download transcript
             sub_cmd = [
-                "yt-dlp",
+                *YT_DLP,
                 "--write-auto-sub",
                 "--sub-lang", lang,
                 "--skip-download",
@@ -361,7 +378,7 @@ def rescrape_transcripts(conn, data_dir):
     failed = 0
     for idx, (vid, title, lang) in enumerate(rows, 1):
         sub_cmd = [
-            "yt-dlp",
+            *YT_DLP,
             "--write-auto-sub",
             "--sub-lang", lang or "en",
             "--skip-download",
@@ -438,7 +455,7 @@ def retry_failed_transcripts(conn, data_dir, specific_channel=None):
         # recovering captions gated behind it (older/long uploads the fast android
         # client returns no subtitles for). EJS solver script pulled from GitHub.
         sub_cmd = [
-            "yt-dlp",
+            *YT_DLP,
             "--js-runtimes", "node",
             "--remote-components", "ejs:github",
             "--write-auto-sub",
@@ -503,7 +520,7 @@ def check_new(conn, limit=50):
     for ch_id, name, handle in channels:
         url = f"https://www.youtube.com/{handle}" if handle else f"https://www.youtube.com/channel/{ch_id}"
         cmd = [
-            "yt-dlp", "--flat-playlist",
+            *YT_DLP, "--flat-playlist",
             "--print", "id", "--print", "title",
             "--playlist-end", str(limit), url
         ]

@@ -111,8 +111,10 @@ class FakeYtDlp:
         self.calls: list[list[str]] = []
 
     def __call__(self, cmd, *args, **kwargs):
-        assert cmd[0] == "yt-dlp", f"unexpected subprocess: {cmd}"
-        self.calls.append(list(cmd))
+        prefix = scrape.YT_DLP
+        assert list(cmd[: len(prefix)]) == prefix, f"unexpected subprocess: {cmd}"
+        cmd = list(cmd[len(prefix):])  # the yt-dlp arguments alone
+        self.calls.append(cmd)
         url = cmd[-1]
         text_mode = kwargs.get("text", False)
         if "--flat-playlist" in cmd:
@@ -256,6 +258,12 @@ def test_flagged_channel_is_left_out_of_the_library(scraped_data: Path) -> None:
     by_channel = data / "library" / "by_channel"
     assert not (by_channel / build_library.slugify(flagged["name"], flagged["id"])).exists()
     assert len(list(by_channel.iterdir())) == len(_seeded_channels()) - 1
+
+
+def test_yt_dlp_goes_through_this_python_when_the_module_is_installed_here() -> None:
+    installed = scrape.yt_dlp_command(find_spec=lambda name: object() if name == "yt_dlp" else None)
+    assert installed == [sys.executable, "-m", "yt_dlp"]
+    assert scrape.yt_dlp_command(find_spec=lambda name: None) == ["yt-dlp"]
 
 
 def test_scrape_reports_a_channel_it_could_not_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

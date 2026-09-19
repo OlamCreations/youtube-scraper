@@ -9,7 +9,7 @@ A YouTube transcript scraper and library builder, in two scripts:
 1. `scripts/scrape.py` lists the latest videos of each channel with yt-dlp, downloads the auto-captions, removes the repeated lines of rolling captions, and stores the text in SQLite.
 2. `scripts/build_library.py` turns that database into a browsable markdown library, a local search index, and bundles of transcripts for LLMs.
 
-Both scripts use only the Python standard library. `scrape.py` calls the `yt-dlp` command-line tool.
+Both scripts use only the Python standard library. `scrape.py` runs yt-dlp: through the current Python when the `yt_dlp` module is installed there (`pip install -r requirements.txt` does that), otherwise the `yt-dlp` executable on PATH.
 
 ## Commands
 
