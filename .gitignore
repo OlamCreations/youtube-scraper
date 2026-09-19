@@ -10,6 +10,9 @@ logs/
 *.tar.gz
 *.log
 
+# Browser cookies for yt-dlp: scrape.py passes config/cookies.txt when it exists
+config/cookies.txt
+
 # Python
 __pycache__/
 .pytest_cache/
