@@ -60,8 +60,8 @@ FIXTURE_VIDEOS = [
     [
         ("fixture-biz-1", "Pricing your offer",
          ["raise your price", "then add a guarantee", "to close more deals"]),
-        ("fixture-biz-2", "Hiring your first salesperson",
-         ["hire for grit", "train the script", "measure every call"]),
+        ("fixture-biz-2", "The closing call",
+         ["most sales are lost", "after the price is said", "closing means asking twice"]),
     ],
     [
         ("fixture-phi-1", "“Café notes”: reading slowly ☕",
@@ -250,14 +250,22 @@ def test_quickstart_seed_scrape_build_search_bundle(scraped_data: Path) -> None:
     assert len(catalog) == expected_videos
 
     # Step 4: search and bundle.
-    search = _run(SCRIPTS / "build_library.py", "search", data, "hawking radiation")
-    assert search.returncode == 0, search.stdout + search.stderr
-    results = json.loads(search.stdout)
-    assert results[0]["video_id"] == "fixture-sci-1"
+    def search(query: str) -> list[dict]:
+        run = _run(SCRIPTS / "build_library.py", "search", data, query)
+        assert run.returncode == 0, run.stdout + run.stderr
+        return json.loads(run.stdout)
 
-    accented = _run(SCRIPTS / "build_library.py", "search", data, "reading slowly")
-    assert accented.returncode == 0, accented.stdout + accented.stderr
-    assert json.loads(accented.stdout)[0]["title"] == FIXTURE_VIDEOS[2][0][1]
+    # The README's query. Only the videos that use its words come back, the sales
+    # video that uses both first. Stemming lets "closing" match "close" in the
+    # pricing video.
+    ranked = search("sales closing")
+    assert [result["video_id"] for result in ranked] == ["fixture-biz-2", "fixture-biz-1"]
+    assert ranked[0]["score"] > ranked[1]["score"] > 0
+
+    assert [result["video_id"] for result in search("hawking radiation")] == ["fixture-sci-1"]
+    assert search("quantum chromodynamics") == []
+
+    assert search("reading slowly")[0]["title"] == FIXTURE_VIDEOS[2][0][1]
 
     bundle = _run(SCRIPTS / "build_library.py", "bundle", data, "pricing guarantee")
     assert bundle.returncode == 0, bundle.stdout + bundle.stderr
@@ -277,6 +285,28 @@ def test_flagged_channel_is_left_out_of_the_library(scraped_data: Path) -> None:
     by_channel = data / "library" / "by_channel"
     assert not (by_channel / build_library.slugify(flagged["name"], flagged["id"])).exists()
     assert len(list(by_channel.iterdir())) == len(_seeded_channels()) - 1
+
+
+def test_build_names_fts5_when_sqlite_lacks_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_connect = sqlite3.connect
+
+    class WithoutFts5:
+        """A connection that fails like an SQLite compiled without FTS5."""
+
+        def __init__(self, path: object) -> None:
+            self._connection = real_connect(path)
+
+        def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+            if "fts5" in sql:
+                raise sqlite3.OperationalError("no such module: fts5")
+            return self._connection.execute(sql, *args)
+
+        def close(self) -> None:
+            self._connection.close()
+
+    monkeypatch.setattr(build_library.sqlite3, "connect", WithoutFts5)
+    with pytest.raises(RuntimeError, match="needs SQLite's FTS5 extension"):
+        build_library.write_search_index(tmp_path / "search.sqlite", [])
 
 
 def test_yt_dlp_goes_through_this_python_when_the_module_is_installed_here() -> None:

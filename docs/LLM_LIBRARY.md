@@ -27,7 +27,7 @@ Each video gets its themes by keyword matching on the title, the description and
 python scripts/build_library.py search ./data "stoic discipline focus"
 ```
 
-It returns the closest videos as JSON, 8 by default (`--limit` changes it). Each video is indexed as a 96-dimension hashed bag of words, stored in `data/library/metadata/embeddings.jsonl`. The search matches shared words, not meaning, and needs no model and no network. For semantic search, feed `catalog.jsonl` to the embedding model of your choice.
+It returns the best matches as JSON, 8 at most by default (`--limit` changes it). The build indexes each video's title, description and transcript in an SQLite FTS5 table, `data/library/metadata/search.sqlite`, and the search ranks them with BM25: a word counts more when it is frequent in the video and rare in the library. Words are stemmed, so "closing" also finds "close". A video that holds none of the query's words is not returned, and the score of a returned video is always positive. The search matches words, not meaning, and needs no model and no network. For semantic search, feed `catalog.jsonl` to the embedding model of your choice.
 
 ## Bundles
 

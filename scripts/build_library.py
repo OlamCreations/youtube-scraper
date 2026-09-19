@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import math
 import re
 import shutil
 import sqlite3
@@ -17,8 +15,12 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-EMBEDDING_DIMENSION = 96
 DEFAULT_SEARCH_LIMIT = 8
+# Full-text index of the library, an SQLite FTS5 table ranked with BM25.
+SEARCH_INDEX = "search.sqlite"
+# Porter stemming makes "closing" match "close" and "sales" match "sale".
+# remove_diacritics makes "cafe" match "café".
+SEARCH_TOKENIZER = "porter unicode61 remove_diacritics 2"
 THEME_KEYWORDS = {
     "ai": ["llm", "gpt", "agent", "prompt", "machine learning", "artificial intelligence", "neural"],
     "business": ["startup", "sales", "marketing", "pricing", "saas", "revenue", "founder"],
@@ -92,27 +94,35 @@ def detect_themes(title: str, description: str, transcript_text: str) -> tuple[s
     return tuple(sorted(matches)) or ("general",)
 
 
-def tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]{2,}", text.lower())
+def write_search_index(path: Path, items: Sequence[VideoItem]) -> None:
+    """Index the title, description and transcript of every video for BM25 search."""
+    connection = sqlite3.connect(path)
+    try:
+        try:
+            connection.execute(
+                "CREATE VIRTUAL TABLE videos USING fts5("
+                f"video_id UNINDEXED, title, description, transcript, tokenize = '{SEARCH_TOKENIZER}')"
+            )
+        except sqlite3.OperationalError as error:
+            raise RuntimeError(
+                f"The search index needs SQLite's FTS5 extension, which this Python's sqlite3 lacks: {error}"
+            ) from error
+        with connection:
+            connection.executemany(
+                "INSERT INTO videos (video_id, title, description, transcript) VALUES (?, ?, ?, ?)",
+                [(item.video_id, item.title, item.description, item.transcript_text) for item in items],
+            )
+    finally:
+        connection.close()
 
 
-def embed_text(text: str, *, dimension: int = EMBEDDING_DIMENSION) -> list[float]:
-    vector = [0.0] * dimension
-    for token in tokenize(text):
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
-        index = int.from_bytes(digest[:4], "big") % dimension
-        sign = 1.0 if digest[4] % 2 == 0 else -1.0
-        weight = 1.0 + (digest[5] / 255.0)
-        vector[index] += sign * weight
+def match_any_word(query: str) -> str:
+    """An FTS5 query that matches documents holding any word of the free-text query.
 
-    norm = math.sqrt(sum(value * value for value in vector))
-    if norm == 0.0:
-        return vector
-    return [round(value / norm, 8) for value in vector]
-
-
-def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
-    return sum(a * b for a, b in zip(left, right))
+    Each word is quoted, so FTS5 operators typed by the user (AND, NOT, *, quotes)
+    are searched as plain words.
+    """
+    return " OR ".join(f'"{word}"' for word in re.findall(r"\w+", query))
 
 
 # Reads the schema that scripts/scrape.py creates (init_db): channels, videos, transcripts.
@@ -241,7 +251,6 @@ def build_library(root: Path) -> dict[str, int]:
         directory.mkdir(parents=True, exist_ok=True)
 
     catalog_rows: list[dict[str, object]] = []
-    embedding_rows: list[dict[str, object]] = []
     by_channel: dict[str, list[VideoItem]] = defaultdict(list)
     by_theme: dict[str, list[VideoItem]] = defaultdict(list)
     by_channel_name: dict[str, str] = {}
@@ -269,16 +278,6 @@ def build_library(root: Path) -> dict[str, int]:
             "summary": (item.description or item.transcript_text[:280]).strip(),
         }
         catalog_rows.append(document)
-
-        embedding_rows.append(
-            {
-                "video_id": item.video_id,
-                "title": item.title,
-                "channel_slug": item.channel_slug,
-                "themes": list(item.themes),
-                "embedding": embed_text(" ".join((item.title, item.description, item.transcript_text[:10000]))),
-            }
-        )
 
     for channel_slug, channel_items in sorted(by_channel.items()):
         channel_dir = channels_dir / channel_slug
@@ -347,7 +346,7 @@ def build_library(root: Path) -> dict[str, int]:
         },
     )
     write_jsonl(metadata_dir / "catalog.jsonl", catalog_rows)
-    write_jsonl(metadata_dir / "embeddings.jsonl", embedding_rows)
+    write_search_index(metadata_dir / SEARCH_INDEX, items)
 
     # -- by_channel: human-readable transcript files named by title --
     by_channel_dir = temp_root / 'by_channel'
@@ -387,26 +386,36 @@ def load_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 def search_library(root: Path, query: str, limit: int) -> list[dict[str, object]]:
+    """Rank the videos that contain words of the query with BM25, best first.
+
+    Videos that share no word with the query are not returned. Each result is its
+    catalog entry plus a positive ``score``: the higher, the better the match.
+    """
     metadata_dir = root / "library" / "metadata"
     catalog = {row["video_id"]: row for row in load_jsonl(metadata_dir / "catalog.jsonl")}
-    embeddings = load_jsonl(metadata_dir / "embeddings.jsonl")
-    if not catalog or not embeddings:
+    index_path = metadata_dir / SEARCH_INDEX
+    if not catalog or not index_path.is_file():
         raise RuntimeError("Library index not found. Run build_library.py build <root> first.")
 
-    query_embedding = embed_text(query)
-    scored: list[tuple[float, dict[str, object]]] = []
-    for row in embeddings:
-        embedding = row.get("embedding")
-        if not isinstance(embedding, list):
-            continue
-        score = cosine_similarity(query_embedding, [float(value) for value in embedding])
-        video_id = str(row["video_id"])
-        entry = dict(catalog.get(video_id, {}))
-        entry["score"] = round(score, 6)
-        scored.append((score, entry))
+    match = match_any_word(query)
+    if not match:
+        return []
+    connection = sqlite3.connect(index_path)
+    try:
+        rows = connection.execute(
+            "SELECT video_id, bm25(videos) FROM videos WHERE videos MATCH ? ORDER BY bm25(videos) LIMIT ?",
+            (match, limit),
+        ).fetchall()
+    finally:
+        connection.close()
 
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return [entry for _, entry in scored[:limit]]
+    results: list[dict[str, object]] = []
+    for video_id, rank in rows:
+        entry = dict(catalog.get(video_id, {}))
+        # FTS5's bm25() is negative for every match, and more negative is better.
+        entry["score"] = float(f"{-rank:.4g}")
+        results.append(entry)
+    return results
 
 
 def build_search_bundle(root: Path, query: str, limit: int, name: str | None) -> Path:

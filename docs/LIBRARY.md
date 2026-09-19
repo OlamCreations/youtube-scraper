@@ -24,7 +24,7 @@ When you run `build_library.py`, it generates the following structure within you
    Pre-packaged context for Large Language Models. `all-transcripts.md` combines every transcript in one file. The `bundle` command adds one file per query.
 
 6. **`metadata/`**
-   `catalog.jsonl` is a complete catalog of the library in JSON Lines format, one JSON object per video, for tooling, search engines, or custom scripts. `embeddings.jsonl` holds the search index and `summary.json` the video, channel and theme counts.
+   `catalog.jsonl` is a complete catalog of the library in JSON Lines format, one JSON object per video, for tooling, search engines, or custom scripts. `search.sqlite` holds the full-text search index and `summary.json` the video, channel and theme counts.
 
 ## Interacting with the Library
 
@@ -50,4 +50,4 @@ This creates a consolidated markdown file containing the transcripts of all matc
 
 ### Note on Search Quality
 
-Search uses lightweight hash-based keyword matching, not semantic embeddings. It works well for finding specific topics but is not a full vector search. For semantic search, export `metadata/catalog.jsonl` to your preferred embedding pipeline.
+Search ranks videos by keyword with BM25, through SQLite's FTS5 full-text index, with stemming ("closing" also finds "close"). Only videos that contain a word of the query come back. It matches words, not meaning. For semantic search, export `metadata/catalog.jsonl` to your preferred embedding pipeline.
