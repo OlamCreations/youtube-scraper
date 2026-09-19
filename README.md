@@ -110,6 +110,12 @@ VALUES ('UCUyDOdBWhC1MCxEjC46d-zw', 'Alex Hormozi', '@AlexHormozi', 'sales', 'en
 2. [yt-dlp](https://github.com/yt-dlp/yt-dlp), installed by `requirements.txt`
 3. pytest for the tests, installed by `requirements-dev.txt`
 
+## How this was built
+
+I did not write this code by hand. I directed AI coding agents. `CLAUDE.md` is the context file the agent reads. `youtube_scraper.vgb.json` describes the pipeline as a graph an agent can follow step by step.
+
+My part is the spec, the review and the checks. `tests/test_quickstart_e2e.py` seeds the example channels, then runs the build and search steps on a database created with the scraper's own schema. A GitHub Action runs the tests on every push.
+
 ## License
 
 MIT — See [LICENSE](LICENSE).
