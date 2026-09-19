@@ -16,7 +16,7 @@ python -m pip install -r requirements.txt
 # Add the example channels
 python scripts/scrape.py ./data --seed channels.example.json
 
-# Scrape the 5 latest videos of each channel
+# Scrape the 5 latest uploads of each channel tab (Videos, Shorts, Live)
 python scripts/scrape.py ./data --limit 5
 
 # Build the library
@@ -66,7 +66,7 @@ python scripts/scrape.py ./data --seed channels.example.json
 # Scrape all enabled channels
 python scripts/scrape.py ./data
 
-# Scrape more videos per channel
+# Look further back (the limit applies to each channel tab)
 python scripts/scrape.py ./data --limit 200
 
 # Scrape one specific channel

@@ -19,7 +19,7 @@ Every command takes the data directory as its first argument (`./data` below).
 
 ```bash
 python scripts/scrape.py ./data --seed channels.example.json   # add channels from a JSON file
-python scripts/scrape.py ./data                                # scrape all enabled channels (latest 50 videos each)
+python scripts/scrape.py ./data                                # scrape all enabled channels (latest 50 of each channel tab)
 python scripts/scrape.py ./data --limit 200                    # look further back
 python scripts/scrape.py ./data --channel UCxxx                # one channel
 python scripts/scrape.py ./data --list                         # list channels

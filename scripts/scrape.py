@@ -506,7 +506,7 @@ def retry_failed_transcripts(conn, data_dir, specific_channel=None):
 def check_new(conn, limit=50):
     """Watchdog: report how many recent videos per enabled channel are not yet in the DB.
 
-    Read-only. Lists the latest `limit` videos per channel via yt-dlp flat-playlist
+    Read-only. Lists the latest `limit` videos per channel tab via yt-dlp flat-playlist
     and diffs against the videos table. Downloads nothing, writes nothing.
     """
     cursor = conn.cursor()
@@ -575,7 +575,7 @@ def reclean_text(conn):
 def main():
     parser = argparse.ArgumentParser(description="Local YouTube transcript scraper")
     parser.add_argument("data_dir", help="Directory for data storage (contains db/ and tmp/)")
-    parser.add_argument("--limit", type=int, default=50, help="Max videos to check per channel (default: 50)")
+    parser.add_argument("--limit", type=int, default=50, help="Max videos to check per channel tab: Videos, Shorts, Live (default: 50)")
     parser.add_argument("--channel", help="Scrape only specific channel ID")
     parser.add_argument("--seed", help="Seed channels from JSON file into DB")
     parser.add_argument("--list", action="store_true", help="List all channels with video counts")
