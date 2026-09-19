@@ -29,7 +29,7 @@ python scripts/scrape.py ./data --rescrape-transcripts         # re-download and
 python scripts/scrape.py ./data --reclean-text                 # re-clean the stored text, no download
 ```
 
-A scrape exits 1 when a channel cannot be listed (for example an id or handle that no longer exists) and names that channel.
+A scrape, or a `--check`, exits 1 when a channel cannot be listed (for example an id or handle that no longer exists) and names that channel. `--check` never shows such a channel as 0 new videos.
 
 ### Build, search, bundle
 
@@ -46,7 +46,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q tests
 ```
 
-The tests run offline. `tests/test_quickstart_e2e.py` runs the README Quick Start commands as subprocesses, from `--seed` through `--limit 5`, `build` and `search` to `bundle`. The pip install steps are not replayed. For the scrape, `tests/fake_yt_dlp` goes first on `PYTHONPATH`: scrape.py runs that stand-in as `python -m yt_dlp`, it answers from a fixture and never touches the network. The tests check the exit code of the scrape: 0 when every channel is listed, 1 when one is not, with that channel named in the output. `.github/workflows/tests.yml` runs the tests on every push and pull request.
+The tests run offline. `tests/test_quickstart_e2e.py` runs the README Quick Start commands as subprocesses, from `--seed` through `--limit 5`, `build` and `search` to `bundle`. The pip install steps are not replayed. For the scrape, `tests/fake_yt_dlp` goes first on `PYTHONPATH`: scrape.py runs that stand-in as `python -m yt_dlp`, it answers from a fixture and never touches the network. The tests check the exit code of the scrape and of `--check`: 0 when every channel is listed, 1 when one is not, with that channel named in the output. `.github/workflows/tests.yml` runs the tests on every push and pull request.
 
 ## Data Locations
 

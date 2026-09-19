@@ -48,6 +48,37 @@ def listing_command(url: str, limit: int) -> list[str]:
     ]
 
 
+def list_uploads(url: str, limit: int) -> tuple[list[tuple[str, str]], str | None]:
+    """A channel's latest uploads as (video id, title) pairs, and None, or no pairs and why the listing failed.
+
+    A failed listing used to give an empty list, so zero new videos: the run exited 0
+    without reading anything, and nothing told "channel already up to date" from
+    "channel never reached". One wrong handle in the database was enough for that
+    false success. A listing that exits non-zero or prints nothing is a failure, and
+    both the scrape and the --check watchdog list channels through here.
+    """
+    proc = subprocess.run(listing_command(url, limit), capture_output=True, text=True,
+                          encoding='utf-8', errors='replace', check=False)
+    lines = (proc.stdout or "").splitlines()
+    if proc.returncode != 0 or not lines:
+        err = (proc.stderr or "").strip().splitlines()
+        return [], (err[-1] if err else "no output and no error")
+    return [(lines[i].strip(), lines[i + 1].strip()) for i in range(0, len(lines) - 1, 2)], None
+
+
+def report_unlisted(name: str, url: str, detail: str) -> None:
+    print(f"!!! Could not list {name} <{url}>: {detail}", flush=True)
+    print("    Check the channel's handle and id in the database (channels.handle, channels.id): "
+          "a wrong or outdated value returns a 404.", flush=True)
+
+
+def report_failures(failed_channels: list[tuple[str, str, str]]) -> None:
+    if failed_channels:
+        print(f"\n!!! {len(failed_channels)} channel(s) could not be read:", flush=True)
+        for name, url, detail in failed_channels:
+            print(f"    - {name} <{url}> : {detail}", flush=True)
+
+
 def utc_now_iso() -> str:
     """The current UTC time as a naive ISO 8601 string, the format the database already holds.
 
@@ -257,27 +288,11 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
         url = f"https://www.youtube.com/{handle}" if handle else f"https://www.youtube.com/channel/{ch_id}"
         
         # 1. List recent videos
-        cmd = listing_command(url, limit)
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
-        lines = (proc.stdout or "").splitlines()
-
-        # A failed listing used to give an empty list, so zero new videos and a silent
-        # `continue`: the scrape exited 0 without reading anything, and nothing told
-        # "channel already up to date" from "channel never reached". One wrong handle
-        # in the database was enough for that false success. Keep the two cases apart
-        # and report the failure.
-        if proc.returncode != 0 or not lines:
-            err = (proc.stderr or "").strip().splitlines()
-            detail = err[-1] if err else "no output and no error"
-            print(f"!!! Could not list {name} <{url}>: {detail}", flush=True)
-            print("    Check the channel's handle and id in the database (channels.handle, channels.id): "
-                  "a wrong or outdated value returns a 404.", flush=True)
-            failed_channels.append((name, url, detail))
+        videos, error = list_uploads(url, limit)
+        if error is not None:
+            report_unlisted(name, url, error)
+            failed_channels.append((name, url, error))
             continue
-
-        videos = []
-        for i in range(0, len(lines) - 1, 2):
-            videos.append((lines[i].strip(), lines[i+1].strip()))
 
         # Check existing
         cursor.execute("SELECT id FROM videos WHERE channel_id = ?", (ch_id,))
@@ -369,10 +384,7 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
         
         print(f"=== Done: {videos_added} videos added, {transcripts_added} transcripts ===", flush=True)
 
-    if failed_channels:
-        print(f"\n!!! {len(failed_channels)} channel(s) could not be read:", flush=True)
-        for name, url, detail in failed_channels:
-            print(f"    - {name} <{url}> : {detail}", flush=True)
+    report_failures(failed_channels)
     return len(failed_channels)
 
 def rescrape_transcripts(conn, data_dir):
@@ -525,6 +537,8 @@ def check_new(conn, limit=50):
 
     Read-only. Lists the latest `limit` videos per channel tab via yt-dlp flat-playlist
     and diffs against the videos table. Downloads nothing, writes nothing.
+    A channel that cannot be listed is named, not counted as 0 new videos.
+    Returns the number of such channels.
     """
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, handle FROM channels WHERE enabled = 1 ORDER BY name")
@@ -533,22 +547,20 @@ def check_new(conn, limit=50):
     print(f"{'Channel':<45} {'New':>5}  {'Latest unseen title'}", flush=True)
     print("-" * 100, flush=True)
     total_new = 0
-    per_channel = []
+    failed_channels = []
     for ch_id, name, handle in channels:
         url = f"https://www.youtube.com/{handle}" if handle else f"https://www.youtube.com/channel/{ch_id}"
-        cmd = listing_command(url, limit)
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
-        lines = (proc.stdout or "").splitlines()
-        listed = []
-        for i in range(0, len(lines) - 1, 2):
-            listed.append((lines[i].strip(), lines[i + 1].strip()))
+        listed, error = list_uploads(url, limit)
+        if error is not None:
+            report_unlisted(name, url, error)
+            failed_channels.append((name, url, error))
+            continue
 
         cursor.execute("SELECT id FROM videos WHERE channel_id = ?", (ch_id,))
         existing = {r[0] for r in cursor.fetchall()}
         new = [(vid, t) for vid, t in listed if vid not in existing]
 
         total_new += len(new)
-        per_channel.append((ch_id, name, len(new)))
         safe_name = (name or ch_id)[:43]
         latest = ""
         if new:
@@ -556,8 +568,10 @@ def check_new(conn, limit=50):
         print(f"{safe_name:<45} {len(new):>5}  {latest}", flush=True)
 
     print("-" * 100, flush=True)
-    print(f"TOTAL new videos available across {len(channels)} enabled channels: {total_new}", flush=True)
-    return per_channel
+    listed_count = len(channels) - len(failed_channels)
+    print(f"TOTAL new videos available across {listed_count} of {len(channels)} enabled channels: {total_new}", flush=True)
+    report_failures(failed_channels)
+    return len(failed_channels)
 
 
 def reclean_text(conn):
@@ -594,7 +608,7 @@ def main():
     parser.add_argument("--list", action="store_true", help="List all channels with video counts")
     parser.add_argument("--rescrape-transcripts", action="store_true", help="Re-download and re-clean all transcripts with improved VTT dedup")
     parser.add_argument("--retry-failed", action="store_true", help="Retry transcript download for videos with has_transcript=0 (optionally scoped with --channel)")
-    parser.add_argument("--check", action="store_true", help="Watchdog: report new (unseen) videos per enabled channel. Read-only, no download.")
+    parser.add_argument("--check", action="store_true", help="Watchdog: report new (unseen) videos per enabled channel. Read-only, no download. Exits 1 if a channel cannot be listed.")
     parser.add_argument("--reclean-text", action="store_true", help="Re-apply the text normaliser to all stored transcripts in place (no re-download)")
 
     args = parser.parse_args()
@@ -612,7 +626,9 @@ def main():
         elif args.list:
             list_channels(conn)
         elif args.check:
-            check_new(conn, args.limit)
+            # Same rule as a scrape: a channel the watchdog cannot list exits 1.
+            if check_new(conn, args.limit):
+                return 1
         elif args.reclean_text:
             reclean_text(conn)
         elif args.retry_failed:

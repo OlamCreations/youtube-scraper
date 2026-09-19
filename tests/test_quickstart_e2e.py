@@ -28,7 +28,8 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from types import MappingProxyType
+from typing import Iterator, Mapping
 
 import pytest
 
@@ -124,7 +125,8 @@ class FakeYtDlp:
     """Fixture file and call log for the fake yt_dlp package in tests/fake_yt_dlp."""
 
     def __init__(self, workdir: Path, listings: dict[str, list[tuple[str, str, list[str]]]],
-                 failing: frozenset[str] = frozenset()):
+                 failing: Mapping[str, str] = MappingProxyType({})):
+        """``failing`` maps a channel id to the way its listing fails: "404", "silent" or "cut short"."""
         self.fixture = workdir / "fake-yt-dlp.json"
         self.log = workdir / "fake-yt-dlp.log"
         channels = _seeded_channels()
@@ -133,7 +135,7 @@ class FakeYtDlp:
                 _channel_url(channel): [[vid, title] for vid, title, _ in listings[channel["id"]]]
                 for channel in channels
             },
-            "failing": [_channel_url(channel) for channel in channels if channel["id"] in failing],
+            "failing": {_channel_url(channel): failing[channel["id"]] for channel in channels if channel["id"] in failing},
             "captions": {vid: _rolling_vtt(lines) for videos in listings.values() for vid, _, lines in videos},
             # The encoding yt-dlp used on a Windows pipe when nothing else was asked.
             "pipe_encoding": "cp1252",
@@ -323,7 +325,7 @@ def test_scrape_exits_1_and_names_the_channel_it_could_not_list(tmp_path: Path) 
     channels = _seeded_channels()
     broken = channels[0]
 
-    fake = FakeYtDlp(tmp_path, _listings(), failing=frozenset({broken["id"]}))
+    fake = FakeYtDlp(tmp_path, _listings(), failing={broken["id"]: "404"})
     run = _run(SCRIPTS / "scrape.py", data, "--limit", "5", env=fake.env())
 
     assert run.returncode == 1, run.stdout + run.stderr
@@ -333,3 +335,65 @@ def test_scrape_exits_1_and_names_the_channel_it_could_not_list(tmp_path: Path) 
     with _db(data) as conn:
         stored = {row[0] for row in conn.execute("SELECT DISTINCT channel_id FROM videos")}
     assert stored == {channel["id"] for channel in channels} - {broken["id"]}
+
+
+def _as_printed(title: str) -> str:
+    """A title as the ``--check`` table prints it: ASCII only, one ? per other character, 48 at most."""
+    return title.encode("ascii", errors="replace").decode("ascii")[:48]
+
+
+def _check_rows(stdout: str) -> dict[str, tuple[int, str]]:
+    """The rows of the ``--check`` table: channel name -> (unseen videos, latest unseen title)."""
+    rows = {}
+    for channel in _seeded_channels():
+        for line in stdout.splitlines():
+            match = re.fullmatch(rf"{re.escape(channel['name'])}\s+(\d+)  (.*)", line)
+            if match:
+                rows[channel["name"]] = (int(match.group(1)), match.group(2))
+    return rows
+
+
+@pytest.mark.parametrize(
+    "failure, detail",
+    [
+        ("404", "HTTP Error 404"),
+        ("silent", "no output and no error"),
+        ("cut short", "fake listing cut short"),
+    ],
+)
+def test_check_names_the_channel_it_could_not_list_and_exits_1(tmp_path: Path, failure: str, detail: str) -> None:
+    """``scrape.py --check`` when one channel cannot be listed: that channel is named, never counted as 0 new videos."""
+    data = tmp_path / "data"
+    _seed(data)
+    channels = _seeded_channels()
+    broken = channels[0]
+
+    fake = FakeYtDlp(tmp_path, _listings(), failing={broken["id"]: failure})
+    run = _run(SCRIPTS / "scrape.py", data, "--check", "--limit", "5", env=fake.env())
+
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert f"Could not list {broken['name']} <{_channel_url(broken)}>: " in run.stdout
+    assert detail in run.stdout
+    # Nothing is scraped yet, so every listed video is unseen. The third channel's
+    # latest title holds curly quotes, an accent and an emoji: a listing read in
+    # the pipe's encoding instead of UTF-8 loses the emoji, and its "?" with it.
+    assert _check_rows(run.stdout) == {
+        channel["name"]: (len(FIXTURE_VIDEOS[index]), _as_printed(FIXTURE_VIDEOS[index][0][1]))
+        for index, channel in enumerate(channels)
+        if channel is not broken
+    }
+
+    calls = fake.calls()
+    assert len(calls) == len(channels) and all(call["ok"] for call in calls), calls
+    assert all(call["argv"][call["argv"].index("--playlist-end") + 1] == "5" for call in calls)
+    with _db(data) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0] == 0, "--check wrote to the database"
+
+
+def test_check_exits_0_with_nothing_new_after_a_scrape(scraped_data: Path, tmp_path: Path) -> None:
+    fake = FakeYtDlp(tmp_path, _listings())
+    run = _run(SCRIPTS / "scrape.py", scraped_data, "--check", "--limit", "5", env=fake.env())
+
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "Could not list" not in run.stdout
+    assert _check_rows(run.stdout) == {channel["name"]: (0, "") for channel in _seeded_channels()}

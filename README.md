@@ -74,7 +74,12 @@ python scripts/scrape.py ./data --channel UCUyDOdBWhC1MCxEjC46d-zw
 
 # List configured channels
 python scripts/scrape.py ./data --list
+
+# Count the unseen videos of each channel, download nothing
+python scripts/scrape.py ./data --check
 ```
+
+A scrape or a `--check` exits 1 when a channel cannot be listed, and names that channel.
 
 ### Build the Library
 

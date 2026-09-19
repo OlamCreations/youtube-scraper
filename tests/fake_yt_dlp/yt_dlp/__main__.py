@@ -8,7 +8,10 @@ It answers the two calls scrape.py makes during a scrape, from the JSON file
 named by the FAKE_YT_DLP_FIXTURE environment variable:
 
 1. ``--flat-playlist --print id --print title --playlist-end N <channel url>``
-   prints the listed videos, or exits 1 like yt-dlp on a 404.
+   prints the listed videos. For a URL the fixture marks as failing, it fails
+   in one of three ways: "404" exits 1 like yt-dlp on a 404, "silent" exits 0
+   and prints nothing, and "cut short" prints the first video, then exits 1
+   with an error.
 2. ``--write-auto-sub --sub-lang L -o TEMPLATE <watch url>`` writes the caption
    file where yt-dlp would.
 
@@ -60,14 +63,23 @@ def print_lines(lines, values, fixture):
 def answer(argv, fixture):
     values, flags, url = parse(argv)
     if "--flat-playlist" in flags:
-        if url in fixture["failing"]:
+        failure = fixture["failing"].get(url)
+        if failure == "404":
             sys.stderr.write(f"ERROR: [youtube:tab] {url}: HTTP Error 404: Not Found\n")
             return 1
+        if failure == "silent":
+            return 0
         if url not in fixture["listings"]:
             raise ValueError(f"listing for a URL the fixture does not have: {url}")
         limit = int(values["--playlist-end"][-1])
         fields = {"id": 0, "title": 1}
         lines = [entry[fields[name]] for entry in fixture["listings"][url][:limit] for name in values["--print"]]
+        if failure == "cut short":
+            print_lines(lines[:len(values["--print"])], values, fixture)
+            sys.stderr.write(f"ERROR: [youtube:tab] {url}: fake listing cut short after one video\n")
+            return 1
+        if failure is not None:
+            raise ValueError(f"failure the fake does not know: {failure}")
         print_lines(lines, values, fixture)
         return 0
     if "--write-auto-sub" in flags:
