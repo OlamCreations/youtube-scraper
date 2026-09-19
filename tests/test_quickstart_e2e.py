@@ -1,16 +1,21 @@
 """End-to-end check of the README Quick Start, fully offline.
 
-The test walks the Quick Start against a temporary data directory:
+The test runs the Quick Start commands against a temporary data directory,
+each one as a real subprocess, the way the README gives them:
 
-1. ``scrape.py --seed channels.example.json`` runs as a real subprocess.
-2. ``scrape.scrape()`` runs in process. yt-dlp is replaced by a fixture that
-   returns a video listing and writes YouTube-style rolling auto-captions, so
-   the rows land in the database created by the scraper's own ``init_db``.
-3. ``build_library.py build`` runs as a real subprocess.
-4. ``build_library.py search`` and ``bundle`` run as real subprocesses.
+1. ``scrape.py <data> --seed channels.example.json``
+2. ``scrape.py <data> --limit 5``
+3. ``build_library.py build <data>``
+4. ``build_library.py search <data> ...`` and ``bundle <data> ...``
 
-Nothing reaches the network: every yt-dlp call goes through the fixture, and
-the fixture fails the test on any call it does not recognise.
+For step 2, tests/fake_yt_dlp goes first on PYTHONPATH. scrape.py finds that
+package instead of the real yt-dlp and runs it as ``python -m yt_dlp``, as it
+does after ``pip install -r requirements.txt``. The fake lists the fixture
+videos and writes YouTube-style rolling auto-captions, so the rows land in the
+database created by the scraper's own ``init_db``. It never opens a network
+connection, logs every call, and rejects any call it does not recognise.
+
+The pip install steps are not replayed.
 """
 
 from __future__ import annotations
@@ -30,12 +35,14 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
 SEED_FILE = REPO / "channels.example.json"
+FAKE_YT_DLP_PATH = REPO / "tests" / "fake_yt_dlp"
 sys.path.insert(0, str(SCRIPTS))
 
 import build_library  # noqa: E402
 import scrape  # noqa: E402
 
-# A deprecated call in the scripts fails the tests instead of printing a warning.
+# A deprecated call fails the tests instead of printing a warning: here through
+# pytest, and in the scripts' subprocesses through ``-W`` (see _run).
 pytestmark = pytest.mark.filterwarnings("error::DeprecationWarning")
 
 # The timestamp format already stored in existing databases: naive UTC, ISO 8601.
@@ -57,7 +64,7 @@ FIXTURE_VIDEOS = [
          ["hire for grit", "train the script", "measure every call"]),
     ],
     [
-        ("fixture-phi-1", "Café notes: reading slowly ☕",
+        ("fixture-phi-1", "“Café notes”: reading slowly ☕",
          ["read what you love", "until you love to read"]),
         ("fixture-phi-2", "Specific knowledge",
          ["specific knowledge cannot be taught", "but it can be learned"]),
@@ -107,63 +114,58 @@ def _channel_url(channel: dict) -> str:
     return f"https://www.youtube.com/{handle}" if handle else f"https://www.youtube.com/channel/{channel['id']}"
 
 
+def _listings() -> dict[str, list[tuple[str, str, list[str]]]]:
+    channels = _seeded_channels()
+    assert len(channels) <= len(FIXTURE_VIDEOS), "add fixture videos for the new seed channel"
+    return {channel["id"]: FIXTURE_VIDEOS[index] for index, channel in enumerate(channels)}
+
+
 class FakeYtDlp:
-    """Stand-in for subprocess.run(["yt-dlp", ...]) inside scrape.py."""
+    """Fixture file and call log for the fake yt_dlp package in tests/fake_yt_dlp."""
 
-    def __init__(self, listings: dict[str, list[tuple[str, str, list[str]]]], failing: frozenset[str] = frozenset()):
-        self.listings = listings
-        self.failing = failing
-        self.url_to_channel = {_channel_url(channel): channel["id"] for channel in _seeded_channels()}
-        self.captions = {vid: lines for videos in listings.values() for vid, _, lines in videos}
-        self.calls: list[list[str]] = []
+    def __init__(self, workdir: Path, listings: dict[str, list[tuple[str, str, list[str]]]],
+                 failing: frozenset[str] = frozenset()):
+        self.fixture = workdir / "fake-yt-dlp.json"
+        self.log = workdir / "fake-yt-dlp.log"
+        channels = _seeded_channels()
+        payload = {
+            "listings": {
+                _channel_url(channel): [[vid, title] for vid, title, _ in listings[channel["id"]]]
+                for channel in channels
+            },
+            "failing": [_channel_url(channel) for channel in channels if channel["id"] in failing],
+            "captions": {vid: _rolling_vtt(lines) for videos in listings.values() for vid, _, lines in videos},
+            # The encoding yt-dlp used on a Windows pipe when nothing else was asked.
+            "pipe_encoding": "cp1252",
+        }
+        self.fixture.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-    def __call__(self, cmd, *args, **kwargs):
-        prefix = scrape.YT_DLP
-        assert list(cmd[: len(prefix)]) == prefix, f"unexpected subprocess: {cmd}"
-        cmd = list(cmd[len(prefix):])  # the yt-dlp arguments alone
-        self.calls.append(cmd)
-        url = cmd[-1]
-        text_mode = kwargs.get("text", False)
-        if "--flat-playlist" in cmd:
-            assert url in self.url_to_channel, f"listing for unknown channel: {url}"
-            channel_id = self.url_to_channel[url]
-            if channel_id in self.failing:
-                return subprocess.CompletedProcess(cmd, 1, "", "ERROR: HTTP Error 404: Not Found")
-            limit = int(cmd[cmd.index("--playlist-end") + 1])
-            rows = []
-            for vid, title, _ in self.listings[channel_id][:limit]:
-                rows.extend([vid, title])
-            return subprocess.CompletedProcess(cmd, 0, "\n".join(rows) + "\n", "")
-        if "--write-auto-sub" in cmd:
-            vid = url.split("watch?v=")[-1]
-            template = cmd[cmd.index("-o") + 1]
-            Path(template.replace("%(id)s", vid) + ".en.vtt").write_text(
-                _rolling_vtt(self.captions[vid]), encoding="utf-8"
-            )
-            empty = "" if text_mode else b""
-            return subprocess.CompletedProcess(cmd, 0, empty, empty)
-        raise AssertionError(f"unrecognised yt-dlp call: {cmd}")
+    def env(self) -> dict[str, str]:
+        return {
+            "FAKE_YT_DLP_FIXTURE": str(self.fixture),
+            "FAKE_YT_DLP_LOG": str(self.log),
+            "PYTHONPATH": os.pathsep.join(filter(None, [str(FAKE_YT_DLP_PATH), os.environ.get("PYTHONPATH")])),
+        }
+
+    def calls(self) -> list[dict]:
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
 
 
-def _run(*args: object) -> subprocess.CompletedProcess:
+def _run(*args: object, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     # Run the scripts with Python's default I/O settings, as on a fresh machine,
     # even if the developer's shell forces UTF-8 mode.
-    env = {key: value for key, value in os.environ.items() if key not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    base = {key: value for key, value in os.environ.items() if key not in ("PYTHONUTF8", "PYTHONIOENCODING")}
     return subprocess.run(
-        [sys.executable, *map(str, args)],
+        [sys.executable, "-W", "error::DeprecationWarning", *map(str, args)],
         cwd=REPO,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=env,
+        env={**base, **(env or {})},
     )
-
-
-def _listings() -> dict[str, list[tuple[str, str, list[str]]]]:
-    channels = _seeded_channels()
-    assert len(channels) <= len(FIXTURE_VIDEOS), "add fixture videos for the new seed channel"
-    return {channel["id"]: FIXTURE_VIDEOS[index] for index, channel in enumerate(channels)}
 
 
 @contextmanager
@@ -177,11 +179,8 @@ def _db(data: Path) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-@pytest.fixture()
-def scraped_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Quick Start steps 1 and 2: seed the example channels, then scrape offline."""
-    data = tmp_path / "data"
-
+def _seed(data: Path) -> None:
+    """Quick Start step 1."""
     seed = _run(SCRIPTS / "scrape.py", data, "--seed", SEED_FILE)
     assert seed.returncode == 0, seed.stdout + seed.stderr
     channels = _seeded_channels()
@@ -189,26 +188,36 @@ def scraped_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     with _db(data) as conn:
         assert conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0] == len(channels)
 
-    fake = FakeYtDlp(_listings())
-    conn = scrape.init_db(data / "db" / "pipeline.db")
-    try:
-        with monkeypatch.context() as patch:
-            patch.setattr(scrape.subprocess, "run", fake)
-            failed = scrape.scrape(conn, data, limit=5)
-    finally:
-        conn.close()
 
-    assert failed == 0
-    assert fake.calls, "the scraper never called yt-dlp"
+@pytest.fixture()
+def scraped_data(tmp_path: Path) -> Path:
+    """Quick Start steps 1 and 2: seed the example channels, then scrape through the fake yt-dlp."""
+    data = tmp_path / "data"
+    _seed(data)
+    channels = _seeded_channels()
+
+    fake = FakeYtDlp(tmp_path, _listings())
+    run = _run(SCRIPTS / "scrape.py", data, "--limit", "5", env=fake.env())
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    calls = fake.calls()
+    assert calls, "scrape.py never ran the fake yt-dlp"
+    assert all(call["ok"] for call in calls), [call for call in calls if not call["ok"]]
+    listing_calls = [call["argv"] for call in calls if "--flat-playlist" in call["argv"]]
+    assert len(listing_calls) == len(channels)
+    assert all(argv[argv.index("--playlist-end") + 1] == "5" for argv in listing_calls)
+
     expected_videos = sum(len(FIXTURE_VIDEOS[i]) for i in range(len(channels)))
     with _db(data) as conn:
         assert conn.execute("SELECT COUNT(*) FROM videos WHERE has_transcript = 1").fetchone()[0] == expected_videos
+        titles = dict(conn.execute("SELECT id, title FROM videos").fetchall())
         stored = dict(conn.execute("SELECT video_id, raw_text FROM transcripts").fetchall())
         timestamps = [row[0] for row in conn.execute("SELECT scraped_at FROM videos")]
         timestamps += [row[0] for row in conn.execute("SELECT last_scraped_at FROM channels")]
     assert timestamps and all(STORED_TIMESTAMP.fullmatch(value) for value in timestamps), timestamps
     for index in range(len(channels)):
-        for vid, _, lines in FIXTURE_VIDEOS[index]:
+        for vid, title, lines in FIXTURE_VIDEOS[index]:
+            assert titles[vid] == title, "the title changed between yt-dlp and the database"
             assert stored[vid] == _expected_text(lines), "rolling captions were not deduplicated"
     return data
 
@@ -248,7 +257,7 @@ def test_quickstart_seed_scrape_build_search_bundle(scraped_data: Path) -> None:
 
     accented = _run(SCRIPTS / "build_library.py", "search", data, "reading slowly")
     assert accented.returncode == 0, accented.stdout + accented.stderr
-    assert json.loads(accented.stdout)[0]["title"] == "Café notes: reading slowly ☕"
+    assert json.loads(accented.stdout)[0]["title"] == FIXTURE_VIDEOS[2][0][1]
 
     bundle = _run(SCRIPTS / "build_library.py", "bundle", data, "pricing guarantee")
     assert bundle.returncode == 0, bundle.stdout + bundle.stderr
@@ -276,21 +285,20 @@ def test_yt_dlp_goes_through_this_python_when_the_module_is_installed_here() -> 
     assert scrape.yt_dlp_command(find_spec=lambda name: None) == ["yt-dlp"]
 
 
-def test_scrape_reports_a_channel_it_could_not_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scrape_exits_1_and_names_the_channel_it_could_not_list(tmp_path: Path) -> None:
+    """Quick Start step 2 when one channel cannot be reached: the others are scraped, the exit code is 1."""
     data = tmp_path / "data"
-    (data / "db").mkdir(parents=True)
-    conn = scrape.init_db(data / "db" / "pipeline.db")
-    try:
-        scrape.seed_channels(conn, SEED_FILE)
-        listings = _listings()
-        broken = next(iter(listings))
-        fake = FakeYtDlp(listings, failing=frozenset({broken}))
-        monkeypatch.setattr(scrape.subprocess, "run", fake)
-        failed = scrape.scrape(conn, data, limit=5)
-        stored = {row[0] for row in conn.execute("SELECT DISTINCT channel_id FROM videos")}
-    finally:
-        conn.close()
+    _seed(data)
+    channels = _seeded_channels()
+    broken = channels[0]
 
-    assert failed == 1
-    assert broken not in stored
-    assert stored == set(listings) - {broken}
+    fake = FakeYtDlp(tmp_path, _listings(), failing=frozenset({broken["id"]}))
+    run = _run(SCRIPTS / "scrape.py", data, "--limit", "5", env=fake.env())
+
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert f"Could not list {broken['name']} <{_channel_url(broken)}>" in run.stdout
+    assert "HTTP Error 404" in run.stdout
+    assert all(call["ok"] for call in fake.calls())
+    with _db(data) as conn:
+        stored = {row[0] for row in conn.execute("SELECT DISTINCT channel_id FROM videos")}
+    assert stored == {channel["id"] for channel in channels} - {broken["id"]}

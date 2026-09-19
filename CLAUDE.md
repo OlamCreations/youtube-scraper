@@ -46,7 +46,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q tests
 ```
 
-The tests run offline. `tests/test_quickstart_e2e.py` replays the README Quick Start with a stand-in for yt-dlp. `.github/workflows/tests.yml` runs them on every push and pull request.
+The tests run offline. `tests/test_quickstart_e2e.py` runs the README Quick Start commands as subprocesses, from `--seed` through `--limit 5`, `build` and `search` to `bundle`. The pip install steps are not replayed. For the scrape, `tests/fake_yt_dlp` goes first on `PYTHONPATH`: scrape.py runs that stand-in as `python -m yt_dlp`, it answers from a fixture and never touches the network. The tests check the exit code of the scrape: 0 when every channel is listed, 1 when one is not, with that channel named in the output. `.github/workflows/tests.yml` runs the tests on every push and pull request.
 
 ## Data Locations
 
@@ -64,7 +64,7 @@ The tests run offline. `tests/test_quickstart_e2e.py` replays the README Quick S
 
 `scrape.init_db` creates three tables: `channels`, `videos` and `transcripts` (text in `transcripts.raw_text`). `build_library.py` reads exactly this schema. A channel whose `flag` column is set is left out of the library.
 
-Change the two scripts together. The end-to-end test builds its database with `init_db`, so it fails if they drift apart.
+Change the two scripts together. The end-to-end test builds its database by running `scrape.py`, then reads it with `build_library.py`, so it fails if they drift apart.
 
 ## Adding a Channel
 
