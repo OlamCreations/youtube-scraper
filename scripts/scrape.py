@@ -31,6 +31,23 @@ def yt_dlp_command(find_spec=importlib.util.find_spec) -> list[str]:
 YT_DLP = yt_dlp_command()
 
 
+def listing_command(url: str, limit: int) -> list[str]:
+    """yt-dlp call that prints the id, then the title, of each of a channel's latest uploads."""
+    return [
+        *YT_DLP,
+        # Without --encoding, yt-dlp encodes what it prints with the output stream's
+        # encoding and drops what does not fit. Measured with yt-dlp 2026.08.19 on a
+        # Windows pipe: cp1252, so curly quotes were stored as U+FFFD and emoji were
+        # lost. The listing is read back as UTF-8.
+        "--encoding", "utf-8",
+        "--flat-playlist",
+        "--print", "id",
+        "--print", "title",
+        "--playlist-end", str(limit),
+        url,
+    ]
+
+
 def utc_now_iso() -> str:
     """The current UTC time as a naive ISO 8601 string, the format the database already holds.
 
@@ -240,15 +257,7 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
         url = f"https://www.youtube.com/{handle}" if handle else f"https://www.youtube.com/channel/{ch_id}"
         
         # 1. List recent videos
-        cmd = [
-            *YT_DLP,
-            "--flat-playlist",
-            "--print", "id",
-            "--print", "title",
-            "--playlist-end", str(limit),
-            url
-        ]
-        
+        cmd = listing_command(url, limit)
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
         lines = (proc.stdout or "").splitlines()
 
@@ -527,11 +536,7 @@ def check_new(conn, limit=50):
     per_channel = []
     for ch_id, name, handle in channels:
         url = f"https://www.youtube.com/{handle}" if handle else f"https://www.youtube.com/channel/{ch_id}"
-        cmd = [
-            *YT_DLP, "--flat-playlist",
-            "--print", "id", "--print", "title",
-            "--playlist-end", str(limit), url
-        ]
+        cmd = listing_command(url, limit)
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
         lines = (proc.stdout or "").splitlines()
         listed = []
