@@ -244,17 +244,17 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
         lines = (proc.stdout or "").splitlines()
 
-        # Un listing qui echoue rendait une liste vide, donc zero nouvelle video, donc
-        # un `continue` muet : le scrape se terminait avec exit 0 sans avoir rien lu, et
-        # rien ne distinguait "chaine deja a jour" de "chaine jamais atteinte". Un mauvais
-        # handle en base suffisait a produire ce faux succes. On separe les deux cas et on
-        # les dit tout haut.
+        # A failed listing used to give an empty list, so zero new videos and a silent
+        # `continue`: the scrape exited 0 without reading anything, and nothing told
+        # "channel already up to date" from "channel never reached". One wrong handle
+        # in the database was enough for that false success. Keep the two cases apart
+        # and report the failure.
         if proc.returncode != 0 or not lines:
             err = (proc.stderr or "").strip().splitlines()
-            detail = err[-1] if err else "aucune sortie, aucune erreur"
-            print(f"!!! ECHEC de listing pour {name} <{url}> : {detail}", flush=True)
-            print(f"    verifier le handle en base (channels.handle) : une valeur inventee "
-                  f"ou perimee donne un 404 silencieux.", flush=True)
+            detail = err[-1] if err else "no output and no error"
+            print(f"!!! Could not list {name} <{url}>: {detail}", flush=True)
+            print("    Check the channel's handle and id in the database (channels.handle, channels.id): "
+                  "a wrong or outdated value returns a 404.", flush=True)
             failed_channels.append((name, url, detail))
             continue
 
@@ -353,7 +353,7 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
         print(f"=== Done: {videos_added} videos added, {transcripts_added} transcripts ===", flush=True)
 
     if failed_channels:
-        print(f"\n!!! {len(failed_channels)} chaine(s) NON LUE(S) :", flush=True)
+        print(f"\n!!! {len(failed_channels)} channel(s) could not be read:", flush=True)
         for name, url, detail in failed_channels:
             print(f"    - {name} <{url}> : {detail}", flush=True)
     return len(failed_channels)
@@ -607,8 +607,8 @@ def main():
         elif args.rescrape_transcripts:
             rescrape_transcripts(conn, data_dir)
         else:
-            # Un echec de listing doit sortir en non-zero : sans ca, un appel automatise
-            # (cron, chaine de commandes, hook) enchaine sur un corpus qu'il croit a jour.
+            # A listing failure must exit non-zero. Otherwise an automated caller (cron,
+            # command chain, hook) carries on with a corpus it believes is up to date.
             failed = scrape(conn, data_dir, args.limit, args.channel)
             if failed:
                 return 1
