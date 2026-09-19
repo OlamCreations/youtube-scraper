@@ -250,8 +250,8 @@ def test_quickstart_seed_scrape_build_search_bundle(scraped_data: Path) -> None:
     assert len(catalog) == expected_videos
 
     # Step 4: search and bundle.
-    def search(query: str) -> list[dict]:
-        run = _run(SCRIPTS / "build_library.py", "search", data, query)
+    def search(query: str, *options: str) -> list[dict]:
+        run = _run(SCRIPTS / "build_library.py", "search", data, query, *options)
         assert run.returncode == 0, run.stdout + run.stderr
         return json.loads(run.stdout)
 
@@ -261,6 +261,7 @@ def test_quickstart_seed_scrape_build_search_bundle(scraped_data: Path) -> None:
     ranked = search("sales closing")
     assert [result["video_id"] for result in ranked] == ["fixture-biz-2", "fixture-biz-1"]
     assert ranked[0]["score"] > ranked[1]["score"] > 0
+    assert [result["video_id"] for result in search("sales closing", "--limit", "1")] == ["fixture-biz-2"]
 
     assert [result["video_id"] for result in search("hawking radiation")] == ["fixture-sci-1"]
     assert search("quantum chromodynamics") == []
