@@ -1,2 +1,3 @@
-# The scripts use only the Python standard library.
-# scrape.py calls the yt-dlp command-line tool, which must be on PATH.
+# The Python scripts use only the standard library.
+# scrape.py calls the yt-dlp command-line tool, installed by this line:
+yt-dlp

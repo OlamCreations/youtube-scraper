@@ -10,17 +10,27 @@ Scrape YouTube channels, extract auto-generated captions, and build a browsable 
 git clone https://github.com/OlamCreations/youtube-scraper.git
 cd youtube-scraper
 
-# Add channels
+# Install yt-dlp, the only dependency
+python -m pip install -r requirements.txt
+
+# Add the example channels
 python scripts/scrape.py ./data --seed channels.example.json
 
-# Scrape transcripts
-python scripts/scrape.py ./data
+# Scrape the 5 latest videos of each channel
+python scripts/scrape.py ./data --limit 5
 
 # Build the library
 python scripts/build_library.py build ./data
 
 # Browse the generated output
 ls data/library/by_channel/
+
+# Search it
+python scripts/build_library.py search ./data "sales closing"
+
+# Run the tests (offline, no YouTube access needed)
+python -m pip install -r requirements-dev.txt
+python -m pytest -q tests
 ```
 
 That is the whole workflow. It needs no API key.
@@ -97,7 +107,8 @@ VALUES ('UCUyDOdBWhC1MCxEjC46d-zw', 'Alex Hormozi', '@AlexHormozi', 'sales', 'en
 ## Requirements
 
 1. Python 3.10+
-2. [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+2. [yt-dlp](https://github.com/yt-dlp/yt-dlp), installed by `requirements.txt`
+3. pytest for the tests, installed by `requirements-dev.txt`
 
 ## License
 

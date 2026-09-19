@@ -42,10 +42,11 @@ python scripts/build_library.py bundle ./data "negotiation"
 ### Tests
 
 ```bash
+python -m pip install -r requirements-dev.txt
 python -m pytest -q tests
 ```
 
-The tests run offline. `tests/test_quickstart_e2e.py` replays the README Quick Start with a stand-in for yt-dlp.
+The tests run offline. `tests/test_quickstart_e2e.py` replays the README Quick Start with a stand-in for yt-dlp. `.github/workflows/tests.yml` runs them on every push and pull request.
 
 ## Data Locations
 
