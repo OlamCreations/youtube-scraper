@@ -27,6 +27,7 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Iterator, Mapping
@@ -48,6 +49,13 @@ pytestmark = pytest.mark.filterwarnings("error::DeprecationWarning")
 
 # The timestamp format already stored in existing databases: naive UTC, ISO 8601.
 STORED_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{6})?")
+
+# A POSIX time zone 14 hours ahead of UTC, for the scrape subprocess: a timestamp
+# taken in local time instead of UTC lands 14 hours away from the clock of the
+# test. The C library reads TZ in this form on POSIX systems, and Python 3.13 on
+# Windows follows it too (measured). Where TZ were ignored, the check would still
+# pass on correct code; it would only stop catching local time.
+FAR_TIMEZONE = "XXX-14"
 
 # Two videos per seeded channel, in the order of channels.example.json.
 # Each caption line is one cue of spoken text.
@@ -71,6 +79,11 @@ FIXTURE_VIDEOS = [
          ["specific knowledge cannot be taught", "but it can be learned"]),
     ],
 ]
+
+
+def _utc_now() -> datetime:
+    """UTC now, naive, to compare with the stored timestamps."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _seeded_channels() -> list[dict]:
@@ -199,7 +212,9 @@ def scraped_data(tmp_path: Path) -> Path:
     channels = _seeded_channels()
 
     fake = FakeYtDlp(tmp_path, _listings())
-    run = _run(SCRIPTS / "scrape.py", data, "--limit", "5", env=fake.env())
+    before = _utc_now()
+    run = _run(SCRIPTS / "scrape.py", data, "--limit", "5", env={**fake.env(), "TZ": FAR_TIMEZONE})
+    after = _utc_now()
     assert run.returncode == 0, run.stdout + run.stderr
 
     calls = fake.calls()
@@ -217,6 +232,10 @@ def scraped_data(tmp_path: Path) -> Path:
         timestamps = [row[0] for row in conn.execute("SELECT scraped_at FROM videos")]
         timestamps += [row[0] for row in conn.execute("SELECT last_scraped_at FROM channels")]
     assert timestamps and all(STORED_TIMESTAMP.fullmatch(value) for value in timestamps), timestamps
+    # UTC, not the local time of the scrape: each one falls within the scrape.
+    slack = timedelta(seconds=2)
+    assert all(before - slack <= datetime.fromisoformat(value) <= after + slack for value in timestamps), (
+        before, after, timestamps)
     for index in range(len(channels)):
         for vid, title, lines in FIXTURE_VIDEOS[index]:
             assert titles[vid] == title, "the title changed between yt-dlp and the database"
@@ -269,6 +288,16 @@ def test_quickstart_seed_scrape_build_search_bundle(scraped_data: Path) -> None:
     assert search("quantum chromodynamics") == []
 
     assert search("reading slowly")[0]["title"] == FIXTURE_VIDEOS[2][0][1]
+
+    # Each word is quoted for FTS5: operator words in a query are searched as
+    # plain words, never parsed. Unquoted, both queries are FTS5 syntax errors.
+    assert [result["video_id"] for result in search("Sales AND closing")] == ["fixture-biz-2", "fixture-biz-1"]
+    assert [result["video_id"] for result in search("sales OR NOT OR closing")] == ["fixture-biz-2", "fixture-biz-1"]
+
+    # Titles are indexed: "evaporate" and "Café" appear only in a title.
+    assert [result["video_id"] for result in search("evaporate")] == ["fixture-sci-1"]
+    # remove_diacritics: "cafe" finds "Café".
+    assert [result["video_id"] for result in search("cafe")] == ["fixture-phi-1"]
 
     bundle = _run(SCRIPTS / "build_library.py", "bundle", data, "pricing guarantee")
     assert bundle.returncode == 0, bundle.stdout + bundle.stderr
