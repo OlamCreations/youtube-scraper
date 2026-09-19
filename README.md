@@ -23,7 +23,7 @@ python scripts/build_library.py build ./data
 ls data/library/by_channel/
 ```
 
-That is the core workflow. No API keys, no hidden control plane, and no private runtime assumptions.
+That is the whole workflow. It needs no API key.
 
 ## What It Does
 
@@ -98,15 +98,6 @@ VALUES ('UCUyDOdBWhC1MCxEjC46d-zw', 'Alex Hormozi', '@AlexHormozi', 'sales', 'en
 
 1. Python 3.10+
 2. [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-
-Optional:
-- PowerShell if you want to use the included helper scripts on Windows
-
-## Notes
-
-- The public repository is intended to stay generic and safe to publish.
-- Do not add private infrastructure details, operator playbooks, hostnames, or internal runtime notes to this README.
-- If you self-host scheduled runs, keep machine-specific configuration outside version control.
 
 ## License
 

@@ -12,19 +12,19 @@ When you run `build_library.py`, it generates the following structure within you
 2. **`videos/{video_id}/`**
    This provides **programmatic access**. Each video has its own folder named by its unique YouTube ID. Inside:
    - `transcript.md`: The full transcript text with metadata header.
-   - `metadata.json`: Full metadata (title, channel, themes, tags, word count).
+   - `metadata.json`: The same record as JSON (title, channel, URL, date, description, themes, transcript).
 
 3. **`channels/{slug}/`**
-   Contains channel-level metadata (`channel.json`) and a generated README index of all videos scraped for that channel.
+   A generated `README.md` that lists every video of that channel.
 
 4. **`themes/{theme}/`**
-   Cross-channel thematic views. The builder auto-detects themes based on keywords (sales, philosophy, science, etc.) and groups relevant videos. For example, a `business_entrepreneurship` theme might contain videos from multiple channels.
+   Cross-channel thematic views. The builder assigns themes by keyword (`ai`, `business`, `software`, `design`, `media`, `productivity`, or `general` when none match) and lists the matching videos. For example, the `business` theme can hold videos from several channels.
 
 5. **`bundles/`**
-   Pre-packaged context ready for Large Language Models. Consolidated markdown files combining multiple transcripts (e.g., an entire channel bundle or a specific theme bundle).
+   Pre-packaged context for Large Language Models. `all-transcripts.md` combines every transcript in one file. The `bundle` command adds one file per query.
 
-6. **`metadata/catalog.jsonl`**
-   A complete catalog of the entire library in JSON Lines format. One JSON object per line, per video. For tooling, search engines, or custom scripts.
+6. **`metadata/`**
+   `catalog.jsonl` is a complete catalog of the library in JSON Lines format, one JSON object per video, for tooling, search engines, or custom scripts. `embeddings.jsonl` holds the search index and `summary.json` the video, channel and theme counts.
 
 ## Interacting with the Library
 

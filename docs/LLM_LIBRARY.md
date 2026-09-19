@@ -1,124 +1,45 @@
 # LLM Library
 
-Local transcript library layer built from `db/pipeline.db`.
-
-## Goal
-
-Turn raw YouTube transcripts into a corpus that is usable by:
-
-- humans browsing by channel, video, or theme
-- local tooling
-- Codex, Claude Code, and Gemini through focused context bundles
+How to hand part of the transcript corpus to an LLM without pasting all of it. Everything below is produced by `scripts/build_library.py` from `data/db/pipeline.db`. The full directory layout is in [LIBRARY.md](LIBRARY.md).
 
 ## Build
 
 ```bash
-python scripts/build_library_from_db.py build .
+python scripts/build_library.py build ./data
 ```
 
-Default output: `library/`
+It prints a one-line summary: `{"videos": <n>, "channels": <n>, "themes": <n>}`.
 
-## Generated Structure
+## What an LLM Can Read
 
-- `library/channels/<channel-slug>/README.md`
-- `library/channels/<channel-slug>/channel.json`
-- `library/videos/<video-id>/metadata.json`
-- `library/videos/<video-id>/transcript.md`
-- `library/videos/<video-id>/context.md`
-- `library/themes/<theme-slug>/README.md`
-- `library/themes/<theme-slug>/theme.json`
-- `library/index/README.md`
-- `library/index/channels.json`
-- `library/index/themes.json`
-- `library/index/search_index.json`
-- `library/metadata/catalog.jsonl`
-- `library/metadata/embeddings.jsonl`
-- `library/bundles/channel__*.md`
-- `library/bundles/theme__*.md`
-- `library/bundles/query__*.md`
+1. `data/library/videos/<video-id>/transcript.md`: one video, with a header (channel, date, URL, themes) and the full transcript.
+2. `data/library/bundles/all-transcripts.md`: every transcript in one file.
+3. `data/library/bundles/<query>.md`: the transcripts that best match a query (see Bundles).
+4. `data/library/metadata/catalog.jsonl`: one JSON object per video with its id, title, channel, themes, date, URL, path and a short summary.
 
-## Metadata Model
+## Themes
 
-Each video record is normalized into:
+Each video gets its themes by keyword matching on the title, the description and the first 8,000 characters of the transcript: `ai`, `business`, `software`, `design`, `media`, `productivity`. A video that matches none gets `general`. The keyword lists are `THEME_KEYWORDS` at the top of `build_library.py`.
 
-- channel identity
-- title
-- published date
-- transcript language/source
-- word count
-- quality score
-- summary
-- notable quotes
-- tags
-- themes
-- relative paths to transcript/context/channel views
-
-## Initial Theme Layer
-
-Theme classification is local and heuristic for now.
-
-Current taxonomy includes:
-
-- `stoicism`
-- `buddhism`
-- `meditation_mindfulness`
-- `psychology`
-- `philosophy`
-- `productivity`
-- `science`
-- `economics`
-- `geopolitics`
-- `spirituality`
-- `self_improvement`
-- `culture_society`
-- `technology_ai`
-- `business_entrepreneurship`
-
-This layer is intentionally simple and replaceable.
-
-## Retrieval Layer
-
-The repo includes a lightweight local embedding index:
-
-- `library/metadata/embeddings.jsonl`
-
-These embeddings are deterministic hashed token vectors, not model-grade semantic embeddings.
-They exist to give the repo:
-
-- targeted retrieval today
-- no external dependency
-- a stable interface to replace later with Axon or another embedding backend
-
-Search:
+## Search
 
 ```bash
-python scripts/build_library_from_db.py search . "stoic discipline focus"
+python scripts/build_library.py search ./data "stoic discipline focus"
 ```
 
-## LLM Bundles
+It returns the closest videos as JSON, 8 by default (`--limit` changes it). Each video is indexed as a 96-dimension hashed bag of words, stored in `data/library/metadata/embeddings.jsonl`. The search matches shared words, not meaning, and needs no model and no network. For semantic search, feed `catalog.jsonl` to the embedding model of your choice.
 
-Generate a query bundle:
+## Bundles
 
 ```bash
-python scripts/build_library_from_db.py bundle . "mindfulness and breathing"
+python scripts/build_library.py bundle ./data "mindfulness and breathing"
 ```
 
-This writes: `library/bundles/query__mindfulness-and-breathing.md`
+This writes `data/library/bundles/mindfulness-and-breathing.md` with the matching transcripts and prints its path. `--name` sets the file name and `--limit` the number of videos. The next `build` replaces the whole library, query bundles included.
 
-Use bundles when you want to hand a chosen slice of the corpus to an LLM without dumping the full library.
+## Typical Use
 
-## Recommended Usage Pattern
-
-1. `manage.ps1 sync` (pull latest from VPS)
-2. `build_library_from_db.py build .`
-3. `build_library_from_db.py search . "..."`
-4. `build_library_from_db.py bundle . "..."`
-5. Pass the resulting bundle or specific `context.md` files to the LLM
-
-## Future Replacement Path
-
-When you are ready for a stronger retrieval layer:
-
-- keep `catalog.jsonl` as the structured source of truth
-- replace `embeddings.jsonl` generation with Axon or another vector backend
-- keep the same channel/video/theme bundle outputs so agent workflows do not need to change
+1. `python scripts/scrape.py ./data` to fetch new videos.
+2. `python scripts/build_library.py build ./data`.
+3. `python scripts/build_library.py search ./data "..."` to see what matches.
+4. `python scripts/build_library.py bundle ./data "..."`, then give the bundle, or a few `transcript.md` files, to the LLM.
