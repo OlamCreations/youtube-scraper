@@ -150,8 +150,8 @@ def init_db(db_path: pathlib.Path):
 def clean_vtt(text: str) -> str:
     """Cleans VTT file contents into deduplicated raw text.
 
-    YouTube auto-subs use a rolling-context format: each cue has two lines —
-    the first repeats the previous cue's text and the second contains the new
+    YouTube auto-subs use a rolling-context format: each cue has two lines.
+    The first repeats the previous cue's text and the second contains the new
     words with inline ``<c>`` timestamps.  Cues with near-zero duration
     (< 50 ms) are pure context echoes and carry no new content.
 

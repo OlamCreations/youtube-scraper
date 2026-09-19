@@ -119,8 +119,8 @@ VALUES ('UCUyDOdBWhC1MCxEjC46d-zw', 'Alex Hormozi', '@AlexHormozi', 'sales', 'en
 
 I did not write this code by hand. I directed AI coding agents. `CLAUDE.md` is the context file the agent reads. `youtube_scraper.vgb.json` describes the pipeline as a graph an agent can follow step by step.
 
-My part is the spec, the review and the checks. `tests/test_quickstart_e2e.py` runs the Quick Start commands, from seeding the example channels to search. A stand-in for yt-dlp answers the scrape, so the tests never reach YouTube. A GitHub Action runs the tests on every push.
+My part is the spec, the review and the checks. `tests/test_quickstart_e2e.py` runs the Quick Start commands, from seeding the example channels to search. It does not replay the two pip install steps. A stand-in for yt-dlp answers the scrape, so the tests never reach YouTube. A GitHub Action runs the tests on every push.
 
 ## License
 
-MIT — See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
