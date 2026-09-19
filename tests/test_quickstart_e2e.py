@@ -337,6 +337,21 @@ def test_scrape_exits_1_and_names_the_channel_it_could_not_list(tmp_path: Path) 
     assert stored == {channel["id"] for channel in channels} - {broken["id"]}
 
 
+@pytest.mark.parametrize("content", [None, "{not json"], ids=["missing file", "invalid JSON"])
+def test_seed_exits_1_when_the_file_cannot_be_read(tmp_path: Path, content: str | None) -> None:
+    seed_file = tmp_path / "channels.json"
+    if content is not None:
+        seed_file.write_text(content, encoding="utf-8")
+    data = tmp_path / "data"
+
+    run = _run(SCRIPTS / "scrape.py", data, "--seed", seed_file)
+
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "Error seeding channels" in run.stdout
+    with _db(data) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0] == 0
+
+
 def _as_printed(title: str) -> str:
     """A title as the ``--check`` table prints it: ASCII only, one ? per other character, 48 at most."""
     return title.encode("ascii", errors="replace").decode("ascii")[:48]

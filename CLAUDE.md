@@ -29,7 +29,7 @@ python scripts/scrape.py ./data --rescrape-transcripts         # re-download and
 python scripts/scrape.py ./data --reclean-text                 # re-clean the stored text, no download
 ```
 
-A scrape, or a `--check`, exits 1 when a channel cannot be listed (for example an id or handle that no longer exists) and names that channel. `--check` never shows such a channel as 0 new videos.
+A scrape, or a `--check`, exits 1 when a channel cannot be listed (for example an id or handle that no longer exists) and names that channel. `--check` never shows such a channel as 0 new videos. `--seed` exits 1 when its JSON file cannot be read.
 
 ### Build, search, bundle
 

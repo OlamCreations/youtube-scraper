@@ -223,8 +223,8 @@ def _ts_to_ms(ts: str) -> int:
     s, ms = rest.split(".")
     return int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
 
-def seed_channels(conn, json_file):
-    """Seeds channels from a JSON file into the database."""
+def seed_channels(conn, json_file) -> bool:
+    """Seeds channels from a JSON file into the database. Returns False if the file could not be seeded."""
     try:
         with open(json_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -250,8 +250,10 @@ def seed_channels(conn, json_file):
             ))
         conn.commit()
         print(f"Seeded {len(channels)} channels from {json_file}", flush=True)
+        return True
     except Exception as e:
         print(f"Error seeding channels: {e}", flush=True)
+        return False
 
 def list_channels(conn):
     """Lists all channels and their video counts."""
@@ -622,7 +624,8 @@ def main():
 
     try:
         if args.seed:
-            seed_channels(conn, args.seed)
+            if not seed_channels(conn, args.seed):
+                return 1
         elif args.list:
             list_channels(conn)
         elif args.check:
