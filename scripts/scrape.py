@@ -30,6 +30,14 @@ def yt_dlp_command(find_spec=importlib.util.find_spec) -> list[str]:
 
 YT_DLP = yt_dlp_command()
 
+
+def utc_now_iso() -> str:
+    """The current UTC time as a naive ISO 8601 string, the format the database already holds.
+
+    datetime.utcnow() gave this format but is deprecated since Python 3.12.
+    """
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
+
 def init_db(db_path: pathlib.Path):
     """Initializes the database schema if it doesn't exist."""
     conn = sqlite3.connect(db_path)
@@ -277,7 +285,7 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
         transcripts_added = 0
         
         for idx, (vid, vtitle) in enumerate(new_videos, 1):
-            now = datetime.datetime.utcnow().isoformat()
+            now = utc_now_iso()
             
             # Insert into videos table
             cursor.execute('''
@@ -347,7 +355,7 @@ def scrape(conn, data_dir: pathlib.Path, limit: int, specific_channel: str = Non
             UPDATE channels 
             SET last_scraped_at = ?, total_videos = (SELECT COUNT(*) FROM videos WHERE channel_id = ?)
             WHERE id = ?
-        ''', (datetime.datetime.utcnow().isoformat(), ch_id, ch_id))
+        ''', (utc_now_iso(), ch_id, ch_id))
         conn.commit()
         
         print(f"=== Done: {videos_added} videos added, {transcripts_added} transcripts ===", flush=True)

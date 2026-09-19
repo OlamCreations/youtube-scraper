@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -33,6 +34,12 @@ sys.path.insert(0, str(SCRIPTS))
 
 import build_library  # noqa: E402
 import scrape  # noqa: E402
+
+# A deprecated call in the scripts fails the tests instead of printing a warning.
+pytestmark = pytest.mark.filterwarnings("error::DeprecationWarning")
+
+# The timestamp format already stored in existing databases: naive UTC, ISO 8601.
+STORED_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{6})?")
 
 # Two videos per seeded channel, in the order of channels.example.json.
 # Each caption line is one cue of spoken text.
@@ -197,6 +204,9 @@ def scraped_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     with _db(data) as conn:
         assert conn.execute("SELECT COUNT(*) FROM videos WHERE has_transcript = 1").fetchone()[0] == expected_videos
         stored = dict(conn.execute("SELECT video_id, raw_text FROM transcripts").fetchall())
+        timestamps = [row[0] for row in conn.execute("SELECT scraped_at FROM videos")]
+        timestamps += [row[0] for row in conn.execute("SELECT last_scraped_at FROM channels")]
+    assert timestamps and all(STORED_TIMESTAMP.fullmatch(value) for value in timestamps), timestamps
     for index in range(len(channels)):
         for vid, _, lines in FIXTURE_VIDEOS[index]:
             assert stored[vid] == _expected_text(lines), "rolling captions were not deduplicated"
