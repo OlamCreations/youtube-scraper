@@ -66,7 +66,7 @@ def init_db(db_path: pathlib.Path):
     ''')
 
     # Idempotent migration: curation flag for problematic sources.
-    # A non-null flag excludes the channel from library builds (see build_library_from_db.py).
+    # A non-null flag excludes the channel from library builds (see build_library.py).
     existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(channels)").fetchall()}
     if "flag" not in existing_cols:
         cursor.execute("ALTER TABLE channels ADD COLUMN flag TEXT")

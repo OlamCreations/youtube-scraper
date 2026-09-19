@@ -10,6 +10,7 @@ import math
 import re
 import shutil
 import sqlite3
+import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -46,7 +47,7 @@ class VideoItem:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
     build_parser = subparsers.add_parser("build", help="Build the library outputs.")
     build_parser.add_argument("root", nargs="?", default=".", help="Pipeline root directory")
@@ -62,15 +63,7 @@ def parse_args() -> argparse.Namespace:
     bundle_parser.add_argument("--limit", type=int, default=DEFAULT_SEARCH_LIMIT, help="Maximum items")
     bundle_parser.add_argument("--name", help="Optional bundle name")
 
-    parser.add_argument("root", nargs="?", help=argparse.SUPPRESS)
     return parser.parse_args()
-
-
-def resolve_command(args: argparse.Namespace) -> tuple[str, Path]:
-    if args.command:
-        return args.command, Path(args.root).expanduser().resolve()
-    root = Path(args.root or ".").expanduser().resolve()
-    return "build", root
 
 
 def slugify(value: str, fallback: str) -> str:
@@ -91,39 +84,6 @@ def connect_database(root: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     return connection
-
-
-def detect_transcript_expression(connection: sqlite3.Connection) -> str:
-    candidates = (
-        "COALESCE(v.transcript, v.transcript_text, t.text, t.transcript_text)",
-        "COALESCE(v.transcript_text, t.text, t.transcript_text)",
-        "COALESCE(v.transcript, t.text)",
-        "t.text",
-    )
-    for candidate in candidates:
-        try:
-            connection.execute(
-                f"""
-                SELECT {candidate}
-                FROM videos v
-                LEFT JOIN transcripts t ON t.video_id = COALESCE(v.video_id, v.id)
-                LIMIT 1
-                """
-            ).fetchone()
-            return candidate
-        except sqlite3.OperationalError:
-            continue
-    raise RuntimeError("Could not determine transcript columns in pipeline.db.")
-
-
-def detect_optional_expression(connection: sqlite3.Connection, candidates: Sequence[str], fallback: str) -> str:
-    for candidate in candidates:
-        try:
-            connection.execute(f"SELECT {candidate} FROM videos v LIMIT 1").fetchone()
-            return candidate
-        except sqlite3.OperationalError:
-            continue
-    return fallback
 
 
 def detect_themes(title: str, description: str, transcript_text: str) -> tuple[str, ...]:
@@ -155,35 +115,53 @@ def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
 
 
-def fetch_video_items(connection: sqlite3.Connection) -> list[VideoItem]:
-    transcript_expression = detect_transcript_expression(connection)
-    channel_id_expr = detect_optional_expression(connection, ("COALESCE(v.channel_id, '')", "v.uploader_id"), "''")
-    duration_expr = detect_optional_expression(connection, ("v.duration_seconds", "v.length_seconds", "v.duration"), "NULL")
-    description_expr = detect_optional_expression(connection, ("COALESCE(v.description, '')", "COALESCE(v.summary, '')"), "''")
+# Reads the schema that scripts/scrape.py creates (init_db): channels, videos, transcripts.
+# A channel whose `flag` column is set is left out of the library.
+VIDEO_QUERY = """
+    SELECT
+        v.id AS video_id,
+        COALESCE(NULLIF(v.title, ''), 'Untitled video') AS title,
+        v.channel_id AS channel_id,
+        COALESCE(NULLIF(c.name, ''), v.channel_id, 'Unknown channel') AS channel_name,
+        'https://www.youtube.com/watch?v=' || v.id AS url,
+        COALESCE(v.published_at, '') AS published_at,
+        COALESCE(v.description, '') AS description,
+        t.raw_text AS transcript_text,
+        COALESCE(v.transcript_source, 'auto-sub') AS transcript_source,
+        v.duration_seconds AS duration_seconds
+    FROM videos v
+    JOIN transcripts t ON t.video_id = v.id
+    LEFT JOIN channels c ON c.id = v.channel_id
+    WHERE c.flag IS NULL
+      AND COALESCE(t.raw_text, '') <> ''
+    ORDER BY channel_name, published_at, title
+"""
 
-    query = f"""
-        SELECT
-            COALESCE(v.video_id, v.id) AS video_id,
-            COALESCE(v.title, v.video_title, 'Untitled video') AS title,
-            {channel_id_expr} AS channel_id,
-            COALESCE(v.channel_name, v.channel_title, v.uploader, 'Unknown channel') AS channel_name,
-            COALESCE(v.url, 'https://www.youtube.com/watch?v=' || COALESCE(v.video_id, v.id)) AS url,
-            COALESCE(v.published_at, v.upload_date, '') AS published_at,
-            {description_expr} AS description,
-            {transcript_expression} AS transcript_text,
-            COALESCE(t.source, v.transcript_source, 'database') AS transcript_source,
-            {duration_expr} AS duration_seconds
-        FROM videos v
-        LEFT JOIN transcripts t ON t.video_id = COALESCE(v.video_id, v.id)
-        WHERE COALESCE({transcript_expression}, '') <> ''
-        ORDER BY COALESCE(v.channel_name, v.channel_title, v.uploader, ''), COALESCE(v.published_at, v.upload_date, ''), COALESCE(v.title, v.video_title, '')
-    """
+
+def assign_channel_slugs(channels: Iterable[tuple[str, str]]) -> dict[str, str]:
+    """Map each channel id to a readable folder name, unique across channels."""
+    slugs: dict[str, str] = {}
+    taken: set[str] = set()
+    for channel_id, channel_name in channels:
+        if channel_id in slugs:
+            continue
+        slug = slugify(channel_name, slugify(channel_id, "channel"))
+        if slug in taken:
+            slug = f"{slug}-{slugify(channel_id, 'channel')}"
+        slugs[channel_id] = slug
+        taken.add(slug)
+    return slugs
+
+
+def fetch_video_items(connection: sqlite3.Connection) -> list[VideoItem]:
+    rows = connection.execute(VIDEO_QUERY).fetchall()
+    channel_slugs = assign_channel_slugs((str(row["channel_id"] or ""), str(row["channel_name"])) for row in rows)
 
     items: list[VideoItem] = []
-    for row in connection.execute(query):
-        channel_name = str(row["channel_name"] or "Unknown channel")
+    for row in rows:
+        channel_name = str(row["channel_name"])
         channel_id = str(row["channel_id"] or "")
-        channel_slug = slugify(channel_id or channel_name, str(row["video_id"]))
+        channel_slug = channel_slugs[channel_id]
         transcript_text = str(row["transcript_text"] or "").strip()
         description = str(row["description"] or "").strip()
         themes = detect_themes(str(row["title"] or ""), description, transcript_text)
@@ -373,10 +351,10 @@ def build_library(root: Path) -> dict[str, int]:
 
     # -- by_channel: human-readable transcript files named by title --
     by_channel_dir = temp_root / 'by_channel'
-    for channel_slug, items in sorted(by_channel.items()):
+    for channel_slug, channel_items in sorted(by_channel.items()):
         ch_dir = by_channel_dir / channel_slug
         ch_dir.mkdir(parents=True, exist_ok=True)
-        for item in items:
+        for item in channel_items:
             safe_name = sanitize_title(item.title, item.video_id)
             dst = ch_dir / f'{safe_name}.md'
             if dst.exists():
@@ -466,7 +444,12 @@ def build_search_bundle(root: Path, query: str, limit: int, name: str | None) ->
 
 def main() -> None:
     args = parse_args()
-    command, root = resolve_command(args)
+    command = args.command
+    root = Path(args.root).expanduser().resolve()
+    # Titles are printed as UTF-8 JSON. Without this, a piped stdout on Windows
+    # falls back to the ANSI code page and crashes on the first emoji in a title.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
 
     if command == "build":
         summary = build_library(root)
